@@ -9,6 +9,8 @@ import streamlit as st
 from lib import analysis as A
 from lib import alerts, live
 from lib import live_analysis as LA
+from lib import ui_company as UC
+from lib.plain import deviation_word, model_name, vs_normal
 from lib.data import OUTLIER_RATIO, SPECIES_KO, get_source, last_actual_week, load_all
 
 warnings.filterwarnings("ignore")
@@ -31,7 +33,7 @@ html, body, .stApp, button, input, textarea, select {font-family:'Pretendard','N
 [data-baseweb="tab-list"]{gap:.15rem;border-bottom:1px solid #e3e8ee}
 button[data-baseweb="tab"]{font-weight:600;font-size:.92rem;padding:.65rem .9rem;color:#5b6776}
 button[data-baseweb="tab"][aria-selected="true"]{color:#14263a}
-button[data-baseweb="tab"]:nth-child(n+8){color:#1e7f73}
+button[data-baseweb="tab"]:nth-child(-n+4){color:#1e7f73}
 [data-baseweb="tab-highlight"]{background:#1f4e79;height:3px;border-radius:3px}
 /* 소제목 */
 h4{margin-top:2.2rem;margin-bottom:.4rem;font-size:1.12rem;font-weight:800;color:#14263a;letter-spacing:-.2px}
@@ -116,7 +118,8 @@ with st.sidebar:
     st.header("설정")
     species = st.radio("육종", ["pork", "beef"], format_func=SPECIES_KO.get, horizontal=True)
     st.subheader("재고 경보 기준")
-    k = st.slider("민감도 (±σ)", 0.5, 3.0, 1.5, 0.1, help="값이 작을수록 경보가 자주 울립니다.")
+    k = st.slider("경보 민감도 (낮을수록 예민)", 0.5, 3.0, 1.5, 0.1,
+                   help="평소 재고 변동폭의 몇 배 넘게 벗어나면 경보로 볼지 정합니다. 숫자가 작을수록 조금만 달라도 경보가 울립니다.")
     baseline = st.radio("기준선", ["all", "rolling52"], format_func=lambda x: {"all": "전체 실적 평균", "rolling52": "직전 52주 평균"}[x])
     st.divider()
     st.caption(f"데이터 소스: **{src.name}**")
@@ -142,7 +145,17 @@ st.markdown(
 <p>축산물 수급 대시보드 · 돼지·소 재고·가격 경보 · 수입 위험 · 유통 병목</p></div>
 <div><span class="chip">합성 데이터 실적 ~{LAST:%Y-%m-%d}</span><span class="chip {_chip[0]}">{_chip[1]}</span></div></div>''',
     unsafe_allow_html=True)
-tabs = st.tabs(["① 현황·경보 [합성]", "② 수급 추이·예측 [합성]", "③ 계절성·이상치 [합성]", "④ 명절·이벤트 [합성]", "⑤ 수입국·단가 [합성]", "⑥ 가격·소비 [합성]", "⑦ 유통 병목 [합성]", "⑧ 실제 데이터 [실제]", "⑨ 실제 분석·예측 [실제]"])
+_t = st.tabs(["오늘의 현황 [실제]", "우리 공장 [내 데이터]", "실제 데이터 [실제]", "실제 분석·예측 [실제]",
+              "현황·경보 [합성]", "수급 추이·예측 [합성]", "계절성·이상치 [합성]", "명절·이벤트 [합성]",
+              "수입국·단가 [합성]", "가격·소비 [합성]", "유통 병목 [합성]"])
+tab_today, tab_company = _t[0], _t[1]
+# 아래 코드는 예전 번호(0~6 = 합성 7개, 7 = 실제 데이터, 8 = 실제 분석)로 탭을 가리키므로 같은 번호로 연결해 둔다
+tabs = [_t[4], _t[5], _t[6], _t[7], _t[8], _t[9], _t[10], _t[2], _t[3]]
+
+with tab_today:
+    UC.render_today(k)
+with tab_company:
+    UC.render_company(k, layout)
 
 
 # ------------------------------------------------------------------ 인사이트 생성
@@ -225,7 +238,7 @@ with tabs[0]:
         st.markdown(f"**{SPECIES_KO[sp]}**")
         for lvl, txt in build_insights(sp):
             st.markdown(f"{ICON[lvl]} {txt}")
-    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** 탭 ⑧(KPI·재고 경보)과 ⑨(재고·가격 경보).")
+    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** '오늘의 현황'과 '실제 분석·예측' 탭.")
 
 # ================================================================== ② 수급 추이·예측
 with tabs[1]:
@@ -264,7 +277,7 @@ with tabs[1]:
         st.info(f"13주 평균 절대 차이 **{g:.1f}%**. 파일 예측이 자체 모델의 95% 구간을 벗어난 주는 **{((mf['file_forecast'] > mf['hi']) | (mf['file_forecast'] < mf['lo'])).sum()}주**입니다.")
     else:
         st.caption("이 지표는 파일 예측만 표시합니다. 자체 모델은 재고·국내 생산·수입량에 제공됩니다.")
-    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** 탭 ⑨의 월 재고·일 소비자가 예측(백테스트 포함).")
+    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** '실제 분석·예측' 탭의 월 재고·일 소비자가 예측(백테스트 포함).")
 
 # ================================================================== ③ 계절성·이상치
 with tabs[2]:
@@ -379,7 +392,7 @@ with tabs[4]:
         fig = go.Figure(go.Bar(x=r["month"], y=r["cif_yoy_pct"], marker_color=[RED if v > 0 else GREEN for v in r["cif_yoy_pct"].fillna(0)]))
         st.plotly_chart(layout(fig, "평균 CIF 단가 전년 동월 대비 (%)", 300), use_container_width=True)
     st.caption("월 합계는 4/5주 차이가 있어 주 평균(weekly_avg_kg)으로 환산해 비교합니다. '기타'는 여러 국가를 묶은 값이라 집중도가 낮게 계산될 수 있습니다.")
-    st.info("합성 데이터 탭입니다. 관세청 수출입실적 API 후보가 있으나 신청·검증 전입니다 (docs/API_SURVEY.md). 실제 수입 소비자가는 탭 ⑧ 참고.")
+    st.info("합성 데이터 탭입니다. 관세청 수출입실적 API 후보가 있으나 신청·검증 전입니다 (docs/API_SURVEY.md). 실제 수입 소비자가는 '실제 데이터' 탭 참고.")
 
 # ================================================================== ⑥ 가격·소비
 with tabs[5]:
@@ -419,7 +432,7 @@ with tabs[5]:
         st.plotly_chart(layout(fig, f"{dim}별 누적 소비", 300), use_container_width=True)
     st.caption(f"소매가 1% 상승 시 소비 {price_e:+.2f}%" if (price_e := A.price_elasticity(ps)) < 0 else
                f"주의: 소비-가격 단순 로그 상관이 양(+{price_e:.2f})입니다. 수요가 가격을 끌어올리는 효과가 섞여 있어 인과적 탄력성으로 해석하지 마세요.")
-    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** 탭 ⑧(소비자가·경락가·국산 vs 수입)과 ⑨(경락가→소비자가 시차). 실제 소비량 데이터는 없습니다.")
+    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** '실제 데이터' 탭(소비자가·경락가·국산 vs 수입)과 '실제 분석·예측' 탭(경락가→소비자가 시차). 실제 소비량 데이터는 없습니다.")
 
 # ================================================================== ⑦ 유통 병목
 with tabs[6]:
@@ -448,6 +461,11 @@ with tabs[6]:
     st.caption("한 구간의 평소 리드타임·마진 대비 얼마나 벗어났는지(z)로 병목을 봅니다. 유출/유입 비율은 구조적으로 1이 아니어서 평균 대비 변화만 해석하세요.")
     st.info("합성 데이터 탭입니다. 단계별 물량·마진·리드타임을 제공하는 공개 데이터를 찾지 못했습니다. 경락가→소비자가 스프레드가 마진의 근사치입니다.")
 
+def _bt(df: pd.DataFrame) -> pd.DataFrame:
+    """백테스트 표를 현장 말로 (모델 이름, 오차 열 이름)."""
+    return df.assign(모델=df["모델"].map(model_name)).rename(columns={"MAPE(%)": "평균 오차(%)"}).round(2)
+
+
 # ================================================================== ⑧ 실제 데이터 (API)
 KIND = {"pork": 4304, "beef": 4301}
 KIND_IMP = {"pork": 4402, "beef": 4401}
@@ -475,25 +493,25 @@ with tabs[8]:
         sa = LA.stock_alerts(stk9, kd9, k)
         last_sa = sa.iloc[-1]
         sig_icon = {"부족": "🔴", "과잉": "🟡", "정상": "🟢"}[last_sa["signal"]]
-        st.markdown(f"{sig_icon} **{sp9}** {last_sa['month']:%Y-%m} 재고는 **{last_sa['signal']}** (z={last_sa['z']:+.2f}, 기대값 대비 "
-                    f"{(last_sa['stock_kg'] / last_sa['expected_kg'] - 1) * 100:+.1f}%). 임계값은 사이드바 민감도(±{k}σ)를 따릅니다.")
+        st.markdown(f"{sig_icon} **{sp9}** {last_sa['month']:%Y-%m} 재고는 **{last_sa['signal']}** ({vs_normal((last_sa['stock_kg'] / last_sa['expected_kg'] - 1) * 100)}). "
+                    f"경보 기준은 사이드바의 '경보 민감도'({k})를 따릅니다.")
         sd9 = (sa["stock_kg"] - sa["expected_kg"]).std()
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"] + k * sd9, line=dict(width=0), showlegend=False, hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"] - k * sd9, fill="tonexty", fillcolor="rgba(46,139,87,0.12)",
-                                 line=dict(width=0), name=f"정상 범위 (±{k}σ)", hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"], name="기대값(추세+계절)", line=dict(color=GRAY, dash="dot")))
+                                 line=dict(width=0), name="정상 범위", hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"], name="평소 수준(추세·계절 반영)", line=dict(color=GRAY, dash="dot")))
         fig.add_trace(go.Scatter(x=sa["month"], y=sa["stock_kg"], name="실제 재고", mode="lines+markers", line=dict(color=ACTUAL, width=2)))
         bad9 = sa[sa["signal"] != "정상"]
         fig.add_trace(go.Scatter(x=bad9["month"], y=bad9["stock_kg"], mode="markers", name="경보", marker=dict(color=RED, size=10)))
         st.plotly_chart(layout(fig, f"{sp9} 월 재고 (kg)", 340), use_container_width=True)
         pa9 = LA.part_alerts(stk9, kd9, k)
         if len(pa9):
-            t = pa9.assign(최신재고=(pa9["latest_kg"] / 1000).round(0), **{"전월(%)": pa9["mom_pct"].round(1), "z": pa9["z"].round(2)})
+            t = pa9.assign(최신재고=(pa9["latest_kg"] / 1000).round(0), **{"전월(%)": pa9["mom_pct"].round(1), "평소 대비": pa9["z"].map(deviation_word)})
             st.markdown("**부위별 경보** (자기 이력 대비)")
-            st.dataframe(t.rename(columns={"part": "부위", "signal": "신호"})[["부위", "최신재고", "전월(%)", "z", "신호"]].rename(columns={"최신재고": "최신 재고(톤)"}),
+            st.dataframe(t.rename(columns={"part": "부위", "signal": "신호"})[["부위", "최신재고", "전월(%)", "평소 대비", "신호"]].rename(columns={"최신재고": "최신 재고(톤)"}),
                          hide_index=True, use_container_width=True)
-        st.caption("추세 + 연 1주기 계절을 최소제곱으로 맞춘 in-sample 잔차 기준입니다. STL은 31개 점에서 과적합해 폐기했습니다.")
+        st.caption("'평소 수준'은 최근 흐름(추세)과 계절 패턴을 반영해 계산한 값입니다. 재고 기록이 31개월뿐이라 단순한 방식을 썼고, 평소보다 벗어난 정도를 경보 기준으로 봅니다.")
 
         # ---------------- 가격 경보
         st.markdown("#### 가격 경보")
@@ -506,8 +524,8 @@ with tabs[8]:
                      hide_index=True, use_container_width=True, height=300)
 
         # ---------------- 예측
-        st.markdown("#### 예측과 백테스트")
-        st.caption("모델 5종을 롤링 백테스트로 비교해 가장 오차가 작은 모델을 씁니다. **직전값(마지막 값 유지)보다 나아지지 않으면 직전값이 선택됩니다.**")
+        st.markdown("#### 예측과 정확도 확인")
+        st.caption("예측 방법 5가지를 과거 데이터에 돌려 보고(일부를 가리고 맞혀 보기) 오차가 가장 작은 방법을 씁니다. **마지막 값을 그대로 쓰는 것보다 나아지지 않으면 '직전 값 그대로'가 선택됩니다.**")
         c1, c2 = st.columns(2)
         with c1:
             s_m = LA.monthly_stock(stk9, kd9)
@@ -516,9 +534,9 @@ with tabs[8]:
             fig.add_trace(go.Scatter(x=s_m.index, y=s_m.values, name="실적", line=dict(color=ACTUAL, width=2)))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["lo"], fill="tonexty", fillcolor="rgba(42,157,143,0.15)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=fm["index"], y=fm["pred"], name=f"예측({fm['best']})", line=dict(color=MODEL, dash="dot", width=2), mode="lines+markers"))
+            fig.add_trace(go.Scatter(x=fm["index"], y=fm["pred"], name=f"예측({model_name(fm['best'])})", line=dict(color=MODEL, dash="dot", width=2), mode="lines+markers"))
             st.plotly_chart(layout(fig, f"{sp9} 월 재고 3개월 예측", 320), use_container_width=True)
-            st.dataframe(fm["backtest"].round(2), hide_index=True, use_container_width=True)
+            st.dataframe(_bt(fm["backtest"]), hide_index=True, use_container_width=True)
             if fm["improve_pct"] > 0:
                 st.success(f"선택 모델이 직전값 기준선보다 오차 {fm['improve_pct']:.1f}% 감소")
             else:
@@ -533,17 +551,17 @@ with tabs[8]:
             fig.add_trace(go.Scatter(x=s_d.index, y=s_d.values, name="실적", line=dict(color=ACTUAL, width=2)))
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["lo"], fill="tonexty", fillcolor="rgba(42,157,143,0.15)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=fd["index"], y=fd["pred"], name=f"예측({fd['best']})", line=dict(color=MODEL, dash="dot", width=2)))
+            fig.add_trace(go.Scatter(x=fd["index"], y=fd["pred"], name=f"예측({model_name(fd['best'])})", line=dict(color=MODEL, dash="dot", width=2)))
             fig.update_yaxes(title="원/kg")
             st.plotly_chart(layout(fig, f"{it9} 소비자가 10영업일 예측", 320), use_container_width=True)
-            st.dataframe(fd["backtest"].round(2), hide_index=True, use_container_width=True)
+            st.dataframe(_bt(fd["backtest"]), hide_index=True, use_container_width=True)
             if fd["improve_pct"] > 0:
                 st.success(f"선택 모델이 직전값 기준선보다 오차 {fd['improve_pct']:.1f}% 감소")
             else:
                 st.warning("기준선(직전값)보다 나은 모델이 없습니다.")
 
         # ---------------- 시차·상관
-        st.markdown("#### 시차·상관 분석")
+        st.markdown("#### 가격이 따라오는 데 걸리는 시간")
         if species == "pork":
             a_w = ap9[ap9["grade"] == "평균"].set_index("date")["price_krw_kg"]
             p_w = pdl9[(pdl9["kind"] == kd9) & (pdl9["item"] == "삼겹살")].groupby("date")["price_krw_kg"].mean()
@@ -559,10 +577,10 @@ with tabs[8]:
                 fig = go.Figure(go.Bar(x=ll["lag"], y=ll["corr"], marker_color=[GREEN if p < 0.05 else GRAY for p in ll["p"]],
                                        text=[f"{c:+.2f}" for c in ll["corr"]], textposition="outside"))
                 fig.update_xaxes(title="소비자가 반영 지연 (주)", dtick=1)
-                st.plotly_chart(layout(fig, f"{lbl} (주간 변화율 상관)", 300), use_container_width=True)
+                st.plotly_chart(layout(fig, f"{lbl}: 몇 주 뒤에 따라가나", 300), use_container_width=True)
                 sig_n = int((ll["p"] < 0.05).sum())
                 note = " 뚜렷한 전달 시차는 확인되지 않았습니다." if sig_n <= 1 else ""
-                st.caption(f"초록=p<0.05. 시차 {len(ll)}개 중 {sig_n}개가 유의합니다. 여러 시차를 동시에 검정해 우연히 유의해질 수 있고 표본은 n={int(ll['n'].min())}~{int(ll['n'].max())}주입니다.{note}")
+                st.caption(f"초록 막대는 우연으로 보기 어려운 관계입니다. 확인한 {len(ll)}개 시차 중 {sig_n}개만 그렇고, 데이터가 {int(ll['n'].min())}~{int(ll['n'].max())}주뿐이라 확정적이지 않습니다.{note}")
             else:
                 st.info("표본이 부족합니다.")
         with c2:
@@ -572,8 +590,8 @@ with tabs[8]:
                 fig = go.Figure(go.Bar(x=sp_c["lag_months"], y=sp_c["corr"], marker_color=[GREEN if p < 0.05 else GRAY for p in sp_c["p"]],
                                        text=[f"{c:+.2f}" for c in sp_c["corr"]], textposition="outside"))
                 fig.update_xaxes(title="재고 변화 후 가격 반영 지연 (개월)", dtick=1)
-                st.plotly_chart(layout(fig, f"{sp9} 재고 → {main9} 가격 (월 변화율 상관)", 300), use_container_width=True)
-                st.caption(f"표본 n={int(sp_c['n'].min())}~{int(sp_c['n'].max())}개월로 매우 작습니다. 유의해 보여도 우연일 가능성이 큽니다.")
+                st.plotly_chart(layout(fig, f"{sp9} 재고가 바뀌면 {main9} 가격이 몇 달 뒤에 따라가나", 300), use_container_width=True)
+                st.caption(f"데이터가 {int(sp_c['n'].min())}~{int(sp_c['n'].max())}개월뿐이라, 관계처럼 보여도 우연일 가능성이 큽니다.")
             else:
                 st.info("표본이 부족합니다.")
         st.warning("재고 데이터는 월 단위이고 약 2~3개월 지연되어 있어, 오늘의 재고 상황이 아니라 마지막 집계 월 기준입니다.")
@@ -591,7 +609,7 @@ with tabs[8]:
 
 with tabs[7]:
     st.subheader("실제 데이터 (축산물품질평가원 OpenAPI)")
-    st.caption("①~⑦ 탭은 합성 CSV, 이 탭만 실제 API 데이터입니다. 규모가 달라 서로 비교하지 마세요 "
+    st.caption("[합성] 표시가 붙은 탭은 합성 CSV이고, 이 탭은 실제 API 데이터입니다. 규모가 달라 서로 비교하지 마세요 "
                "(예: 실제 돼지 재고 약 1.8만 톤, 합성 약 9.2만 톤).")
     if not live.has_key():
         st.error("`.env` 에 인증키(KEY_EKAPE_DISTRIB)가 없습니다.")
@@ -674,12 +692,12 @@ with tabs[7]:
         a = ap[ap["grade"] == "평균"].sort_values("date")
         if len(a):
             k4.metric("제주 돼지 경락가", f"{a['price_krw_kg'].iloc[-1]:,.0f}원/kg", help=f"{a['date'].iloc[-1]:%Y-%m-%d}, 지육 기준")
-    if len(sk) >= 12:  # 실제 재고 기준 신호 (탭 ⑨와 같은 방법: 추세+계절 기대값 대비 z, 민감도는 사이드바)
+    if len(sk) >= 12:  # 실제 재고 기준 신호 ('실제 분석·예측' 탭과 같은 방법: 추세+계절 기대값 대비 z, 민감도는 사이드바)
         _sa = LA.stock_alerts(stk, kd, k).iloc[-1]
         k5.metric(f"{sp_ko} 재고 신호 ({_sa['month']:%Y-%m})",
                   {"부족": "🔴 이럼 안 돼지", "과잉": "🟡 넘쳐도 안 돼지", "정상": "🟢 걱정 없소"}[_sa["signal"]],
-                  f"z {_sa['z']:+.2f}", delta_color="off",
-                  help="실제 월 재고가 추세+계절 기대값에서 얼마나 벗어났는지(z). 기준은 사이드바 민감도를 따릅니다. 마지막 집계 월 기준입니다.")
+                  vs_normal((_sa["stock_kg"] / _sa["expected_kg"] - 1) * 100), delta_color="off",
+                  help="실제 월 재고가 평소 수준(추세·계절 반영)과 얼마나 다른지로 판단합니다. 기준은 사이드바의 경보 민감도를 따릅니다. 마지막 집계 월 기준입니다.")
 
     # ---- 재고
     st.markdown("#### 부위별 재고 (월)")
@@ -691,7 +709,7 @@ with tabs[7]:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=sk["month"], y=[mu + k * sdv] * len(sk), line=dict(width=0), showlegend=False, hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=sk["month"], y=[mu - k * sdv] * len(sk), fill="tonexty", fillcolor="rgba(46,139,87,0.12)",
-                                     line=dict(width=0), name=f"정상 범위 (±{k}σ)", hoverinfo="skip"))
+                                     line=dict(width=0), name="정상 범위", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=sk["month"], y=sk["stock_kg"], name="재고", line=dict(color=ACTUAL, width=2), mode="lines+markers"))
             bad = sk[sk["z"].abs() >= k]
             fig.add_trace(go.Scatter(x=bad["month"], y=bad["stock_kg"], mode="markers", name="경보", marker=dict(color=RED, size=10)))
@@ -705,7 +723,7 @@ with tabs[7]:
             st.plotly_chart(layout(fig, "부위별 재고 (최근 12개월)", 340), use_container_width=True)
         zl = sk.iloc[-1]["z"]
         sig = "부족" if zl <= -k else "과잉" if zl >= k else "정상"
-        live_notes.append(("bad" if sig != "정상" else "ok", f"{sp_ko} 실제 재고({sk['month'].iloc[-1]:%Y-%m})는 **{sig}** 구간입니다 (z={zl:+.2f}, 전월 {mom:+.1f}%)."))
+        live_notes.append(("bad" if sig != "정상" else "ok", f"{sp_ko} 실제 재고({sk['month'].iloc[-1]:%Y-%m})는 **{sig}** 구간입니다 ({vs_normal((sk.iloc[-1]['stock_kg'] / mu - 1) * 100).replace('평소보다', '전체 평균보다')}, 전월 {mom:+.1f}%)."))
         lastp = parts[parts["month"] == parts["month"].max()]
         top = lastp.sort_values("stock_kg", ascending=False).iloc[0]
         live_notes.append(("ok", f"최근 재고가 가장 많은 부위는 **{top['part']}** ({top['stock_kg'] / lastp['stock_kg'].sum() * 100:.0f}%) 입니다."))

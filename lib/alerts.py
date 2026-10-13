@@ -5,6 +5,7 @@
   price   부위 소비자가가 평년 대비 ±price_gap % 이상, 또는 4주 연속 상승/하락
   quality 데이터 품질 점검의 '경고'
   collect 마지막 수집이 실패
+  company 우리 공장 CSV 계산 결과가 긴급·발주 필요 (올려 둔 파일이 있을 때만)
 중복 방지: data/live/_alerts.json 에 (규칙·대상·기간) 키를 저장해 같은 경보는 다시 보내지 않는다.
   python -m lib.alerts          # 실제 평가 + 발송
   python -m lib.alerts --test   # 임계값을 낮춰 시험 (별도 이력 파일 사용, 실제 이력은 건드리지 않음)
@@ -19,6 +20,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
+from lib import advice as ADV
+from lib import company as CO
 from lib import live
 from lib import live_analysis as LA
 
@@ -77,6 +82,24 @@ def find_alerts(cfg: dict) -> list[dict]:
         if q["level"] == "경고":
             out.append({"rule": "quality", "level": "주의", "key": f"quality:{q['table']}:{_h(q['when'], q['detail'])}",
                         "message": f"데이터 품질: {q['detail']} ({q['when']})"})
+
+    # 우리 공장: 올려 둔 CSV가 있을 때만 (샘플 데이터는 알리지 않는다). 기본값(안전재고·리드타임)은 코드 기본값을 쓴다.
+    try:
+        saved = CO.load_saved()
+        if any(v is not None for v in saved.values()):
+            data = CO.load_data(saved)
+            if data.ready():
+                proj = CO.project(data)
+                for _, r in proj.summary.iterrows():
+                    if r["상태"] in ("긴급", "발주필요"):
+                        deadline = r["발주기한"] if r["발주기한"] is not None and not pd.isna(r["발주기한"]) else r["소진예정일"]
+                        ins = ADV.instruction(r, ADV.Market(), proj.base_date)
+                        out.append({"rule": "company", "level": "경고" if r["상태"] == "긴급" else "주의",
+                                    "key": f"company:{r['원료']}:{r['상태']}:{pd.Timestamp(deadline):%Y-%m-%d}",
+                                    "message": "우리 공장 · " + ins["headline"]})
+    except Exception as e:  # 자사 파일 문제로 시장 알림까지 막지 않는다
+        out.append({"rule": "collect", "level": "주의", "key": f"company-error:{type(e).__name__}:{str(e)[:40]}",
+                    "message": f"우리 공장 파일을 계산하지 못했습니다: {e}"})
 
     status = live.last_status()
     if status and not status.get("ok", True):

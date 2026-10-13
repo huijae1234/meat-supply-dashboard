@@ -10,3 +10,6 @@ data/live/
 secrets/
 .claude/
 source_config.json
+
+# 회사 자료(CSV)
+data/company/
