@@ -1,0 +1,11 @@
+﻿cut_id,species,species_ko,cut_name_ko,cut_name_en
+P01,pork,돼지고기,삼겹살,pork belly
+P02,pork,돼지고기,목살,pork neck
+P03,pork,돼지고기,앞다리,pork shoulder
+P04,pork,돼지고기,뒷다리,pork hind leg
+P05,pork,돼지고기,갈비,pork ribs
+B01,beef,쇠고기,등심,sirloin
+B02,beef,쇠고기,안심,tenderloin
+B03,beef,쇠고기,갈비,short rib
+B04,beef,쇠고기,양지,brisket
+B05,beef,쇠고기,사태,shank
