@@ -1,4 +1,4 @@
-"""새 탭 두 개의 화면: '오늘의 현황'(실제 데이터 중심)과 '우리 공장'(CSV 업로드 + 계산).
+"""새 화면 두 개: '오늘의 현황'(실제 데이터 중심)과 '우리 공장'(CSV 업로드 + 계산).
 
 app.py가 이미 커서 화면 코드를 여기로 뺐다. 차트 스타일(layout)과 색은 app.py에서 받아 쓴다.
 """
@@ -14,10 +14,9 @@ import streamlit as st
 from lib import advice as A
 from lib import company as C
 from lib import live
+from lib import theme
 from lib.plain import VERDICT, VERDICT_ICON, days, md, ton, vs_normal, vs_year, change_text
 
-STATUS_ICON = {"긴급": "🔴", "발주필요": "🟠", "과잉": "🟡", "정상": "🟢"}
-LEVEL_ICON = {"긴급": "🔴", "발주": "🟠", "과잉": "🟡", "정상": "🟢"}
 
 
 def live_sig() -> str:
@@ -85,7 +84,7 @@ def _company_block(m: A.Market) -> bool:
         return False
     data, label = current_company()
     if data is None or not data.ready():
-        st.info("**우리 공장 탭**에 재고·입고 예정·생산계획·배합표 CSV를 올리면, 여기에 원료별 소진 예정일과 "
+        st.info("**우리 공장** 화면에 재고·입고 예정·생산계획·배합표 CSV를 올리면, 여기에 원료별 소진 예정일과 "
                 "**발주 지시**(날짜·톤)가 나옵니다. 지금은 시장 신호만 보여드립니다.")
         return False
     proj = C.project(data, settings=get_settings())
@@ -93,16 +92,15 @@ def _company_block(m: A.Market) -> bool:
     counts = pd.Series([a["level"] for a in acts]).value_counts()
     st.caption(f"{label} · 재고 기준일 {md(proj.base_date)}")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🔴 긴급", int(counts.get("긴급", 0)))
-    c2.metric("🟠 발주 필요", int(counts.get("발주", 0)))
-    c3.metric("🟡 넉넉함", int(counts.get("과잉", 0)))
-    c4.metric("🟢 이상 없음", int(counts.get("정상", 0)))
+    for col, (label, key, tone) in zip((c1, c2, c3, c4), (("긴급", "긴급", "critical"), ("발주 필요", "발주", "serious"),
+                                                          ("넉넉함", "과잉", "warning"), ("이상 없음", "정상", "good"))):
+        col.markdown(theme.kpi_html(label, str(int(counts.get(key, 0))), tone=tone), unsafe_allow_html=True)
     todo = [a for a in acts if a["level"] in ("긴급", "발주")]
     if todo:
         for a in todo[:6]:
             _action_card(a)
         if len(todo) > 6:
-            st.caption(f"나머지 {len(todo) - 6}건은 '우리 공장' 탭에서 확인하세요.")
+            st.caption(f"나머지 {len(todo) - 6}건은 '우리 공장' 화면에서 확인하세요.")
     else:
         st.success("지금 당장 필요한 발주나 긴급 조치는 없습니다.")
     return True
@@ -113,7 +111,7 @@ def _market_block(m: A.Market, own_first: bool) -> None:
     cols = st.columns(2)
     for col, v in zip(cols, A.market_verdicts(m)):
         with col, st.container(border=True):
-            st.markdown(f"### {v['icon']} {v['species']}: {v['verdict']}")
+            st.markdown(f'<div class="vhead"><span class="sp">{v["species"]}</span>{theme.dot(v["signal"])}{v["verdict"]}</div>', unsafe_allow_html=True)
             st.write(v["text"])
             if v["bad_parts"]:
                 st.write("특히 적은 부위: **" + ", ".join(v["bad_parts"]) + "**")
@@ -157,7 +155,7 @@ def render_today(k: float) -> None:
 
 def _action_card(a: dict) -> None:
     with st.container(border=True):
-        st.markdown(f"**{LEVEL_ICON[a['level']]} {a['headline']}**")
+        st.markdown(f"{theme.dot(a['level'])}**{a['headline']}**", unsafe_allow_html=True)
         for s in a["steps"]:
             st.markdown(f"- {s}")
         for s in a["market"]:
@@ -176,13 +174,13 @@ def render_company(k: float, layout) -> None:
     st.caption("원료 재고·입고 예정·생산계획·배합표 CSV를 올리면 **원료별 소진 예정일과 발주 시점·수량**을 계산합니다. "
                "파일은 이 PC의 `data/company/` 에만 저장되고 git에는 올라가지 않습니다.")
     if password_set():
-        st.caption("🔒 비밀번호가 설정돼 있습니다(`.env`의 `COMPANY_PASSWORD`). 이 탭과 '오늘의 현황'의 우리 공장 부분은 입력 후에만 보입니다.")
+        st.caption("🔒 비밀번호가 설정돼 있습니다(`.env`의 `COMPANY_PASSWORD`). 이 화면과 '오늘의 현황'의 우리 공장 부분은 입력 후에만 보입니다.")
     else:
         st.warning("회사 데이터를 넣으면 같은 와이파이에서 대시보드를 여는 사람 누구나 볼 수 있습니다. "
-                   "`.env`에 `COMPANY_PASSWORD=원하는비밀번호` 한 줄을 넣고 다시 실행하면 이 탭이 잠깁니다.", icon="🔒")
+                   "`.env`에 `COMPANY_PASSWORD=원하는비밀번호` 한 줄을 넣고 다시 실행하면 이 화면이 잠깁니다.", icon="🔒")
 
     top = st.columns([2, 2, 2])
-    # 상태를 바꾼 뒤에는 화면을 다시 그린다 ('오늘의 현황' 탭이 이 탭보다 먼저 그려지기 때문)
+    # 상태를 바꾼 뒤에는 화면을 다시 그린다 ('오늘의 현황'이 이 화면보다 먼저 그려지기 때문)
     if top[0].button("샘플(가짜) 데이터로 시험", use_container_width=True, help="날짜는 오늘 기준으로 만든 설명용 가짜 숫자입니다. 파일을 저장하지 않습니다."):
         st.session_state["co_source"] = "sample"
         st.rerun()
@@ -263,7 +261,7 @@ def render_company(k: float, layout) -> None:
     st.caption(f"{label} · 재고 기준일 {md(proj.base_date)} · 앞으로 {C.HORIZON_DAYS}일 계산")
 
     table = pd.DataFrame({
-        "상태": s["상태"].map(lambda x: f"{STATUS_ICON[x]} {x}"), "원료": s["원료"], "보관": s["보관"],
+        "상태": s["상태"], "원료": s["원료"], "보관": s["보관"],
         "현재고": s["현재고_kg"].map(ton), "하루 사용": s["일평균사용_kg"].map(ton),
         "재고일수(입고 전)": s["재고일수"].map(days), "안전재고 아래": s["안전재고이하일"].map(md),
         "소진 예정": s["소진예정일"].map(md), "발주 기한": s["발주기한"].map(md),
@@ -279,13 +277,13 @@ def render_company(k: float, layout) -> None:
     pick = st.selectbox("원료", s["원료"].tolist(), key="co_pick")
     g = proj.daily[proj.daily["원료"] == pick]
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=g["날짜"], y=g["예상재고_kg"] / 1000, name="예상 재고", line=dict(color="#1f4e79", width=3)))
-    fig.add_trace(go.Scatter(x=g["날짜"], y=g["안전재고_kg"] / 1000, name="안전재고", line=dict(color="#e07b00", dash="dash")))
+    fig.add_trace(go.Scatter(x=g["날짜"], y=g["예상재고_kg"] / 1000, name="예상 재고", line=dict(color=theme.BLUE, width=2)))
+    fig.add_trace(go.Scatter(x=g["날짜"], y=g["안전재고_kg"] / 1000, name="안전재고", line=dict(color=theme.ORANGE, dash="dash", width=2)))
     ib = g[g["입고_kg"] > 0]
     if len(ib):
         fig.add_trace(go.Scatter(x=ib["날짜"], y=ib["예상재고_kg"] / 1000, mode="markers", name="입고 예정",
-                                 marker=dict(color="#2a9d8f", size=11, symbol="triangle-up")))
-    fig.add_hline(y=0, line_color="#c0392b", line_width=1)
+                                 marker=dict(color=theme.INK2, size=10, symbol="triangle-up")))
+    fig.add_hline(y=0, line_color=theme.STATUS["critical"], line_width=1)
     fig.update_yaxes(title="톤")
     st.plotly_chart(layout(fig, f"{pick} 예상 재고", 380), use_container_width=True)
     st.caption("파란 선이 주황 점선(안전재고) 아래로 내려가면 부족 위험, 0 아래(빨간 선)로 내려가면 소진입니다. 신규 발주는 반영하지 않은 예상입니다.")

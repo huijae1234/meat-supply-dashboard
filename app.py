@@ -9,58 +9,18 @@ import streamlit as st
 from lib import analysis as A
 from lib import alerts, live
 from lib import live_analysis as LA
+from lib import theme
 from lib import ui_company as UC
-from lib.plain import deviation_word, model_name, vs_normal
+from lib.plain import VERDICT, deviation_word, model_name, vs_normal
 from lib.data import OUTLIER_RATIO, SPECIES_KO, get_source, last_actual_week, load_all
 
 warnings.filterwarnings("ignore")
 st.set_page_config(page_title="고기가 부족하게 돼지 않겠소?", page_icon="🥩", layout="wide")
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
-html, body, .stApp, button, input, textarea, select {font-family:'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif !important}
-.stApp{background:#f6f8fb}
-.block-container{padding-top:2.2rem;padding-bottom:4rem;max-width:1400px}
-/* 헤더 */
-.hero{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:.75rem;padding-bottom:1.1rem;margin-bottom:1rem;border-bottom:1px solid #e3e8ee}
-.hero h1{margin:0;padding:0;font-size:2.05rem;font-weight:900;letter-spacing:-.6px;color:#14263a}
-.hero p{margin:.35rem 0 0;color:#6b7785;font-size:.95rem}
-.chip{display:inline-block;padding:.28rem .75rem;margin-left:.4rem;border-radius:999px;font-size:.78rem;font-weight:500;border:1px solid #d5dce5;background:#fff;color:#5b6776}
-.chip.live{border-color:#9bd3cb;color:#1e7f73;background:#eef9f7}
-.chip.bad{border-color:#e6b3ad;color:#b03a2e;background:#fdf1ef}
-/* 탭 */
-[data-baseweb="tab-list"]{gap:.15rem;border-bottom:1px solid #e3e8ee}
-button[data-baseweb="tab"]{font-weight:600;font-size:.92rem;padding:.65rem .9rem;color:#5b6776}
-button[data-baseweb="tab"][aria-selected="true"]{color:#14263a}
-button[data-baseweb="tab"]:nth-child(-n+4){color:#1e7f73}
-[data-baseweb="tab-highlight"]{background:#1f4e79;height:3px;border-radius:3px}
-/* 소제목 */
-h4{margin-top:2.2rem;margin-bottom:.4rem;font-size:1.12rem;font-weight:800;color:#14263a;letter-spacing:-.2px}
-/* 지표 카드 */
-[data-testid="stMetric"]{background:#fff;border:1px solid #e3e8ee;border-radius:14px;padding:.95rem 1.1rem;box-shadow:0 1px 2px rgba(20,38,58,.04)}
-[data-testid="stMetricLabel"]{color:#6b7785;font-size:.82rem}
-[data-testid="stMetricValue"]{font-size:1.5rem;font-weight:800;line-height:1.25;color:#14263a}
-[data-testid="stMetricValue"] div,[data-testid="stMetricLabel"] div{white-space:normal!important;overflow:visible!important;text-overflow:clip!important}
-/* 차트 카드 */
-[data-testid="stPlotlyChart"]{background:#fff;border:1px solid #e3e8ee;border-radius:14px;padding:.4rem .5rem;box-shadow:0 1px 2px rgba(20,38,58,.04)}
-/* 표·안내·캡션 */
-[data-testid="stDataFrame"]{border:1px solid #e3e8ee;border-radius:12px;overflow:hidden}
-[data-testid="stAlert"]{border-radius:12px;border:none}
-[data-testid="stCaptionContainer"]{color:#6b7785;font-size:.84rem;line-height:1.6}
-[data-testid="stExpander"]{background:#fff;border:1px solid #e3e8ee;border-radius:12px}
-/* 사이드바·입력 */
-[data-testid="stSidebar"]{background:#eef2f7;border-right:1px solid #e3e8ee}
-[data-testid="stSidebar"] h2{font-size:1.05rem;font-weight:800;color:#14263a}
-[data-testid="stSidebar"] h3{font-size:.9rem;font-weight:700;color:#5b6776}
-.stButton button{border-radius:10px;border:1px solid #d5dce5;background:#fff;font-weight:600}
-.stButton button:hover{border-color:#1f4e79;color:#1f4e79}
-[data-baseweb="select"] > div{border-radius:10px}
-</style>
-""", unsafe_allow_html=True)
+st.markdown(theme.CSS, unsafe_allow_html=True)
 
-ACTUAL, FILEFC, MODEL = "#1f4e79", "#e07b00", "#2a9d8f"
-RED, GREEN, GRAY = "#c0392b", "#2e8b57", "#8a8f98"
+ACTUAL, FILEFC, MODEL = theme.BLUE, theme.ORANGE, theme.INK2   # 실적=파랑, 파일 예측=주황, 자체 모델=짙은 회색
+RED, BLUE, GRAY = theme.STATUS["critical"], theme.BLUE, theme.MUTED  # 부호 구분: 양수=빨강, 음수=파랑 (초록·빨강 조합은 색약에서 구분이 어렵다)
 METRICS = {
     "ending_stock_kg": "기말 재고 (kg)",
     "domestic_output_kg": "국내 생산량 (kg)",
@@ -86,26 +46,26 @@ LAST = last_actual_week(sup)
 
 
 def layout(fig, title=None, height=380, yfmt=None):
+    """차트 공통 모양: 중립 격자, 낮은 대비의 눈금, 왼쪽 정렬 제목, 검증된 계열 색 순서."""
     for tr in fig.data:  # 점이 20개 미만이면 plotly가 마커를 붙이므로 선만 쓰도록 고정
         if tr.type == "scatter" and tr.mode is None:
             tr.mode = "lines"
-    fig.update_layout(font=dict(family="Pretendard, 'Noto Sans KR', 'Malgun Gothic', sans-serif", size=13),
-                      colorway=[ACTUAL, FILEFC, MODEL, "#8e5ea2", "#c0392b", "#7f8c8d", "#e6b800", "#3b8ea5"],
-                      title=dict(text=title, y=0.97, yanchor="top", font=dict(size=15)) if title else None, height=height,
-                      margin=dict(l=10, r=10, t=80 if title else 40, b=10),
-                      legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0), hovermode="x unified",
+    fig.update_layout(font=dict(family="Pretendard, 'Noto Sans KR', 'Malgun Gothic', sans-serif", size=13, color=theme.INK2),
+                      colorway=theme.SERIES,
+                      title=dict(text=title, x=0, xanchor="left", y=0.97, yanchor="top", font=dict(size=14, color=theme.INK)) if title else None,
+                      height=height, margin=dict(l=10, r=10, t=80 if title else 40, b=10),
+                      legend=dict(orientation="h", y=1.0, yanchor="bottom", x=0, font=dict(size=12, color=theme.INK2)), hovermode="x unified",
                       plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                      hoverlabel=dict(bgcolor="#ffffff", font_size=13, bordercolor="#d5dce5"))
-    fig.update_layout(legend_font_size=12)
-    fig.update_xaxes(showgrid=False, linecolor="#d5dce5", tickfont=dict(size=12, color="#6b7785"), title_font=dict(size=12, color="#6b7785"))
-    fig.update_yaxes(gridcolor="rgba(20,38,58,0.07)", zeroline=False, tickformat=yfmt,
-                     tickfont=dict(size=12, color="#6b7785"), title_font=dict(size=12, color="#6b7785"))
+                      hoverlabel=dict(bgcolor=theme.SURFACE, font_size=13, font_color=theme.INK, bordercolor=theme.GRID))
+    axis = dict(tickfont=dict(size=12, color=theme.MUTED), title_font=dict(size=12, color=theme.INK2))
+    fig.update_xaxes(showgrid=False, linecolor=theme.BASELINE, **axis)
+    fig.update_yaxes(gridcolor=theme.GRID, gridwidth=1, zeroline=False, tickformat=yfmt, **axis)
     return fig
 
 
 def shade_forecast(fig):
     fig.add_vrect(x0=LAST.to_pydatetime(), x1=sup["week_start"].max().to_pydatetime(),
-                  fillcolor="rgba(224,123,0,0.07)", line_width=0)
+                  fillcolor="rgba(11,11,11,0.04)", line_width=0)
     return fig
 
 
@@ -113,49 +73,51 @@ def fmt_kg(v):
     return f"{v / 1e3:,.0f}톤"
 
 
-# ------------------------------------------------------------------ 사이드바
-with st.sidebar:
-    st.header("설정")
-    species = st.radio("육종", ["pork", "beef"], format_func=SPECIES_KO.get, horizontal=True)
-    st.subheader("재고 경보 기준")
-    k = st.slider("경보 민감도 (낮을수록 예민)", 0.5, 3.0, 1.5, 0.1,
-                   help="평소 재고 변동폭의 몇 배 넘게 벗어나면 경보로 볼지 정합니다. 숫자가 작을수록 조금만 달라도 경보가 울립니다.")
-    baseline = st.radio("기준선", ["all", "rolling52"], format_func=lambda x: {"all": "전체 실적 평균", "rolling52": "직전 52주 평균"}[x])
-    st.divider()
-    st.caption(f"데이터 소스: **{src.name}**")
-    st.caption(f"마지막 실적 주: **{LAST:%Y-%m-%d}**")
-    if st.button("데이터 다시 읽기"):
-        st.cache_resource.clear()
-        st.rerun()
-    with st.expander("데이터 품질"):
-        err = T["meat_errors"]
-        st.write(f"소비량 입력 오류 **{len(err)}건**을 그룹 중앙값으로 보정했습니다 (중앙값의 {OUTLIER_RATIO:g}배 초과).")
-        st.dataframe(err.head(50), use_container_width=True, height=200)
-        st.caption("fact_import_monthly 는 오류 셀이 있는 엑셀 대신 로컬 CSV를 사용합니다.")
-
-sp_ko = SPECIES_KO[species]
+# ------------------------------------------------------------------ 상단 바
 def _live_sig() -> str:
     return "|".join(f"{p.name}:{p.stat().st_mtime_ns}" for p in sorted(live.LIVE_DIR.glob("*.csv"))) if live.LIVE_DIR.exists() else ""
 
 
 _ls = live.last_status()
-_chip = ("bad", f"실제 수집 실패 {_ls.get('errors', 0)}건") if _ls and not _ls.get("ok", True) else ("live", f"실제 수집 {live.last_refresh() or '없음'}")
+_bad = bool(_ls and not _ls.get("ok", True))
+_collect = f"실제 수집 실패 {_ls.get('errors', 0)}건" if _bad else f"실제 데이터 수집 {live.last_refresh() or '없음'}"
 st.markdown(
     f'''<div class="hero"><div><h1>🥩🐷🐂 고기가 부족하게 돼지 않겠소?</h1>
 <p>축산물 수급 대시보드 · 돼지·소 재고·가격 경보 · 수입 위험 · 유통 병목</p></div>
-<div><span class="chip">합성 데이터 실적 ~{LAST:%Y-%m-%d}</span><span class="chip {_chip[0]}">{_chip[1]}</span></div></div>''',
+<div><span class="meta">합성 데이터 실적 ~{LAST:%Y-%m-%d}</span><span class="meta">{theme.dot("critical" if _bad else "good")}{_collect}</span></div></div>''',
     unsafe_allow_html=True)
-_t = st.tabs(["오늘의 현황 [실제]", "우리 공장 [내 데이터]", "실제 데이터 [실제]", "실제 분석·예측 [실제]",
-              "현황·경보 [합성]", "수급 추이·예측 [합성]", "계절성·이상치 [합성]", "명절·이벤트 [합성]",
-              "수입국·단가 [합성]", "가격·소비 [합성]", "유통 병목 [합성]"])
-tab_today, tab_company = _t[0], _t[1]
-# 아래 코드는 예전 번호(0~6 = 합성 7개, 7 = 실제 데이터, 8 = 실제 분석)로 탭을 가리키므로 같은 번호로 연결해 둔다
-tabs = [_t[4], _t[5], _t[6], _t[7], _t[8], _t[9], _t[10], _t[2], _t[3]]
 
-with tab_today:
+# 모든 설정(육종 포함)은 우측 상단 '설정' 팝오버 안에 모은다
+_, _bar_set = st.columns([8, 1.2])
+with _bar_set:
+    with st.popover("설정", use_container_width=True):
+        species = st.radio("육종", ["pork", "beef"], format_func=SPECIES_KO.get, horizontal=True, key="species")
+        st.divider()
+        st.markdown("**재고 경보 기준**")
+        k = st.slider("경보 민감도 (낮을수록 예민)", 0.5, 3.0, 1.5, 0.1,
+                      help="평소 재고 변동폭의 몇 배 넘게 벗어나면 경보로 볼지 정합니다. 숫자가 작을수록 조금만 달라도 경보가 울립니다.")
+        baseline = st.radio("기준선 (합성 데이터 화면에 적용)", ["all", "rolling52"],
+                            format_func=lambda x: {"all": "전체 실적 평균", "rolling52": "직전 52주 평균"}[x])
+        st.divider()
+        st.caption(f"데이터 소스: {src.name} · 마지막 실적 주 {LAST:%Y-%m-%d}")
+        if st.button("데이터 다시 읽기"):
+            st.cache_resource.clear()
+            st.rerun()
+
+sp_ko = SPECIES_KO[species]
+
+
+def page_today():
     UC.render_today(k)
-with tab_company:
+
+
+def page_company():
     UC.render_company(k, layout)
+
+
+def _syn_title(name: str) -> None:
+    st.subheader(name)
+    st.caption("합성 데이터 · 분석 방법을 보여 주는 시연용 화면입니다.")
 
 
 # ------------------------------------------------------------------ 인사이트 생성
@@ -202,10 +164,10 @@ def build_insights(sp: str) -> list[tuple[str, str]]:
     return out
 
 
-ICON = {"bad": "🔴", "warn": "🟠", "ok": "🟢"}
 
 # ================================================================== ① 현황·경보
-with tabs[0]:
+def page_syn_status():
+    _syn_title("현황·경보")
     cols = st.columns(2)
     for col, sp in zip(cols, ["pork", "beef"]):
         a = A.stock_alert_table(sup, sp, k, baseline)
@@ -215,7 +177,7 @@ with tabs[0]:
             st.subheader(SPECIES_KO[sp])
             c1, c2 = st.columns(2)
             c1.metric("기말 재고", fmt_kg(last["ending_stock_kg"]), f"{(last['ending_stock_kg'] / prev['ending_stock_kg'] - 1) * 100:+.1f}% 전주")
-            c2.metric("재고 신호", {"부족": "🔴 이럼 안 돼지", "과잉": "🟡 넘쳐도 안 돼지", "정상": "🟢 걱정 없소"}[last["signal"]], f"z {last['z']:+.2f}", delta_color="off")
+            c2.markdown(theme.kpi_html("재고 신호", VERDICT[last["signal"]], f"z {last['z']:+.2f}", tone=last["signal"]), unsafe_allow_html=True)
             c3, c4 = st.columns(2)
             c3.metric("재고 회전", f"{last['weeks_of_cover']:.1f}주치", f"{last['weeks_of_cover'] - prev['weeks_of_cover']:+.2f}주", delta_color="off")
             c4.metric("수입 비중", f"{last['import_share_pct']:.1f}%", f"{last['import_share_pct'] - prev['import_share_pct']:+.1f}%p", delta_color="off")
@@ -223,7 +185,7 @@ with tabs[0]:
     a = A.stock_alert_table(sup, species, k, baseline)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=a["week_start"], y=a["upper"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=a["week_start"], y=a["lower"], fill="tonexty", fillcolor="rgba(46,139,87,0.12)",
+    fig.add_trace(go.Scatter(x=a["week_start"], y=a["lower"], fill="tonexty", fillcolor="rgba(11,11,11,0.05)",
                              line=dict(width=0), name=f"정상 범위 (±{k}σ)", hoverinfo="skip"))
     ac, fc = a[a["data_type"] == "actual"], a[a["data_type"] == "forecast"]
     fig.add_trace(go.Scatter(x=ac["week_start"], y=ac["ending_stock_kg"], name="실적", line=dict(color=ACTUAL, width=2)))
@@ -237,11 +199,17 @@ with tabs[0]:
     for sp in [species, "beef" if species == "pork" else "pork"]:
         st.markdown(f"**{SPECIES_KO[sp]}**")
         for lvl, txt in build_insights(sp):
-            st.markdown(f"{ICON[lvl]} {txt}")
-    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** '오늘의 현황'과 '실제 분석·예측' 탭.")
+            st.markdown(f"{theme.dot(lvl)}{txt}", unsafe_allow_html=True)
+    st.info("합성 데이터 화면입니다. **실제 데이터 대응:** '오늘의 현황'과 '실제 분석·예측' 화면.")
+    with st.expander("합성 데이터 품질"):
+        err = T["meat_errors"]
+        st.write(f"소비량 입력 오류 **{len(err)}건**을 그룹 중앙값으로 보정했습니다 (중앙값의 {OUTLIER_RATIO:g}배 초과).")
+        st.dataframe(err.head(50), use_container_width=True, height=200)
+        st.caption("fact_import_monthly 는 오류 셀이 있는 엑셀 대신 로컬 CSV를 사용합니다.")
 
 # ================================================================== ② 수급 추이·예측
-with tabs[1]:
+def page_syn_trend():
+    _syn_title("수급 추이·예측")
     metric = st.selectbox("지표", list(METRICS), format_func=METRICS.get)
     d = sup[sup["species"] == species].sort_values("week_start")
     ac, fc = d[d["data_type"] == "actual"], d[d["data_type"] == "forecast"]
@@ -252,7 +220,7 @@ with tabs[1]:
     if metric in MODELED:
         mf = A.forecast_frame(sup, cal, species, metric)
         fig.add_trace(go.Scatter(x=mf["week_start"], y=mf["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=mf["week_start"], y=mf["lo"], fill="tonexty", fillcolor="rgba(42,157,143,0.15)",
+        fig.add_trace(go.Scatter(x=mf["week_start"], y=mf["lo"], fill="tonexty", fillcolor="rgba(82,81,78,0.10)",
                                  line=dict(width=0), name="자체 모델 95% 구간", hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=mf["week_start"], y=mf["model"], name="자체 모델", line=dict(color=MODEL, dash="dot", width=2)))
     shade_forecast(fig)
@@ -277,10 +245,11 @@ with tabs[1]:
         st.info(f"13주 평균 절대 차이 **{g:.1f}%**. 파일 예측이 자체 모델의 95% 구간을 벗어난 주는 **{((mf['file_forecast'] > mf['hi']) | (mf['file_forecast'] < mf['lo'])).sum()}주**입니다.")
     else:
         st.caption("이 지표는 파일 예측만 표시합니다. 자체 모델은 재고·국내 생산·수입량에 제공됩니다.")
-    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** '실제 분석·예측' 탭의 월 재고·일 소비자가 예측(백테스트 포함).")
+    st.info("합성 데이터 화면입니다. **실제 데이터 대응:** '실제 분석·예측' 화면의 월 재고·일 소비자가 예측(백테스트 포함).")
 
 # ================================================================== ③ 계절성·이상치
-with tabs[2]:
+def page_syn_season():
+    _syn_title("계절성·이상치")
     metric3 = st.selectbox("지표 ", ["slaughter_heads", "domestic_output_kg", "import_volume_kg", "ending_stock_kg"], format_func=METRICS.get)
     s = A.stl_decompose(sup, species, metric3)
     thr = st.slider("이상치 기준 |z| (STL 잔차)", 2.0, 5.0, 3.0, 0.5)
@@ -308,10 +277,11 @@ with tabs[2]:
         t = t.merge(cal[["week_start", "holiday_name"]].assign(주=lambda x: x["week_start"].dt.strftime("%Y-%m-%d")).drop(columns="week_start"), on="주", how="left")
         t = t.rename(columns={"holiday_name": "명절"})
         st.dataframe(t[["주", "실적", "기대", "편차(%)", "z", "명절"]].sort_values("z", key=abs, ascending=False), hide_index=True, use_container_width=True)
-    st.info("합성 데이터 탭입니다. 실제 도축·생산 주간 데이터를 제공하는 API를 찾지 못했습니다 (docs/API_SURVEY.md).")
+    st.info("합성 데이터 화면입니다. 실제 도축·생산 주간 데이터를 제공하는 API를 찾지 못했습니다 (docs/API_SURVEY.md).")
 
 # ================================================================== ④ 명절·이벤트
-with tabs[3]:
+def page_syn_event():
+    _syn_title("명절·이벤트")
     cuts = cut_dim[cut_dim["species"] == species]
     pick = st.selectbox("부위", ["전체"] + cuts["cut_id"].tolist(), format_func=lambda x: "전체" if x == "전체" else cuts.set_index("cut_id").loc[x, "cut_name_ko"])
     cons = A.weekly_consumption(meat, species, None if pick == "전체" else pick)
@@ -319,7 +289,7 @@ with tabs[3]:
     l, r = st.columns(2)
     with l:
         hc = A.holiday_curve(ev)
-        fig = go.Figure(go.Bar(x=hc["weeks_to_holiday"], y=hc["mean"] - 100, marker_color=[GREEN if v >= 0 else RED for v in hc["mean"] - 100],
+        fig = go.Figure(go.Bar(x=hc["weeks_to_holiday"], y=hc["mean"] - 100, marker_color=[RED if v >= 0 else BLUE for v in hc["mean"] - 100],
                                text=[f"{v:+.0f}%" for v in hc["mean"] - 100], textposition="outside"))
         fig.update_xaxes(title="명절 주 기준 (0 = 명절 주, 음수 = 이전)", dtick=1)
         fig.update_yaxes(title="평소 대비 %")
@@ -340,25 +310,28 @@ with tabs[3]:
     fig.add_hline(y=100, line_dash="dot", line_color=GRAY)
     st.plotly_chart(layout(fig, "주간 소비 지수", 340), use_container_width=True)
     st.info("재고 관점: 명절 **직전 주**까지 재고를 확보하고, 명절 **다음 주**(소비 피크 후행)의 보충 물량을 점검하세요.")
-    st.info("합성 데이터 탭입니다. 실제 소비량 데이터를 제공하는 API를 찾지 못했습니다.")
+    st.info("합성 데이터 화면입니다. 실제 소비량 데이터를 제공하는 API를 찾지 못했습니다.")
 
 # ================================================================== ⑤ 수입국·단가
-with tabs[4]:
+def page_syn_import():
+    _syn_title("수입국·단가")
     r = A.import_risk(imp, species)
     d = imp[imp["species"] == species]
+    cc = theme.country_colors(d["country"].unique())  # 같은 나라는 모든 차트에서 같은 색
     l, rr = st.columns(2)
     with l:
         fig = go.Figure()
         for c, g in d.groupby("country"):
-            fig.add_trace(go.Scatter(x=g["month"], y=g["import_share_pct"], name=c, stackgroup="one", mode="lines"))
+            fig.add_trace(go.Scatter(x=g["month"], y=g["import_share_pct"], name=c, stackgroup="one", mode="lines",
+                                     line=dict(color=cc[c], width=1), fillcolor=theme.rgba(cc[c], 0.55)))
         fig.update_yaxes(title="%")
-        shade = fig.add_vrect(x0=LAST.to_pydatetime(), x1=d["month"].max().to_pydatetime(), fillcolor="rgba(224,123,0,0.07)", line_width=0)
+        shade = fig.add_vrect(x0=LAST.to_pydatetime(), x1=d["month"].max().to_pydatetime(), fillcolor="rgba(11,11,11,0.04)", line_width=0)
         st.plotly_chart(layout(fig, "수입국 비중 추이", 360), use_container_width=True)
     with rr:
         fig = go.Figure()
         for c, g in d.groupby("country"):
-            fig.add_trace(go.Scatter(x=g["month"], y=g["cif_price_usd_kg"], name=c, mode="lines"))
-        fig.add_vrect(x0=LAST.to_pydatetime(), x1=d["month"].max().to_pydatetime(), fillcolor="rgba(224,123,0,0.07)", line_width=0)
+            fig.add_trace(go.Scatter(x=g["month"], y=g["cif_price_usd_kg"], name=c, mode="lines", line=dict(color=cc[c], width=2)))
+        fig.add_vrect(x0=LAST.to_pydatetime(), x1=d["month"].max().to_pydatetime(), fillcolor="rgba(11,11,11,0.04)", line_width=0)
         fig.update_yaxes(title="USD/kg")
         st.plotly_chart(layout(fig, "수입 단가 (CIF)", 360), use_container_width=True)
     l, rr = st.columns(2)
@@ -367,17 +340,16 @@ with tabs[4]:
         cur = r[r["data_type"] == "actual"].iloc[-1]
         last_d = d[d["month"] == cur["month"]].sort_values("import_share_pct", ascending=False)
         top_y = max(3000, r["hhi"].max() * 1.15)
-        palette = ["#e07b00", "#2a9d8f", "#8e5ea2", "#c0392b", "#3b8ea5", "#e6b800"]
         fig = go.Figure()
-        for y0, y1, color, name in [(0, 1500, "rgba(46,139,87,0.08)", "분산"), (1500, 2500, "rgba(224,123,0,0.08)", "중간"),
-                                    (2500, top_y, "rgba(192,57,43,0.08)", "고집중")]:
+        for y0, y1, color, name in [(0, 1500, "rgba(11,11,11,0.00)", "분산"), (1500, 2500, "rgba(11,11,11,0.04)", "중간"),
+                                    (2500, top_y, "rgba(208,59,59,0.07)", "고집중")]:
             fig.add_hrect(y0=y0, y1=min(y1, top_y), fillcolor=color, line_width=0, annotation_text=name,
                           annotation_position="top right", annotation_font_size=12)
         for i, c in enumerate(last_d["country"]):
             g = d[d["country"] == c].sort_values("month")
-            style = dict(color=GRAY, dash="dash", width=2) if c == "기타" else dict(color=palette[i % len(palette)], width=2)
+            style = dict(color=cc[c], dash="dash", width=2) if c == "기타" else dict(color=cc[c], width=2)
             fig.add_trace(go.Scatter(x=g["month"], y=g["import_share_pct"] ** 2, name=f"{c} 기여", mode="lines", line=style))
-        fig.add_trace(go.Scatter(x=r["month"], y=r["hhi"], line=dict(color="#14263a", width=4), name="합계 = 집중도(HHI)"))
+        fig.add_trace(go.Scatter(x=r["month"], y=r["hhi"], line=dict(color=theme.INK, width=3), name="합계 = 집중도(HHI)"))
         fig.add_trace(go.Scatter(x=[cur["month"]], y=[cur["hhi"]], mode="markers+text", text=[f"{cur['hhi']:,.0f}"],
                                  textposition="top left", marker=dict(color=RED, size=10), showlegend=False))
         fig.update_yaxes(title="집중도 점수 (나라별 비중²)", range=[0, top_y])
@@ -389,13 +361,14 @@ with tabs[4]:
                    f"비중을 제곱하므로 큰 나라일수록 기여가 급격히 커집니다. 가장 최근 달: {parts}. "
                    "점선 '기타'는 여러 나라를 묶은 값이라 실제 기여를 과소 계산합니다. 배경 구간(분산 1,500 미만 · 중간 · 고집중 2,500 이상)은 통상 기준이며 이 대시보드에 맞게 검증한 값은 아닙니다.")
     with rr:
-        fig = go.Figure(go.Bar(x=r["month"], y=r["cif_yoy_pct"], marker_color=[RED if v > 0 else GREEN for v in r["cif_yoy_pct"].fillna(0)]))
+        fig = go.Figure(go.Bar(x=r["month"], y=r["cif_yoy_pct"], marker_color=[RED if v > 0 else BLUE for v in r["cif_yoy_pct"].fillna(0)]))
         st.plotly_chart(layout(fig, "평균 CIF 단가 전년 동월 대비 (%)", 300), use_container_width=True)
     st.caption("월 합계는 4/5주 차이가 있어 주 평균(weekly_avg_kg)으로 환산해 비교합니다. '기타'는 여러 국가를 묶은 값이라 집중도가 낮게 계산될 수 있습니다.")
-    st.info("합성 데이터 탭입니다. 관세청 수출입실적 API 후보가 있으나 신청·검증 전입니다 (docs/API_SURVEY.md). 실제 수입 소비자가는 '실제 데이터' 탭 참고.")
+    st.info("합성 데이터 화면입니다. 관세청 수출입실적 API 후보가 있으나 신청·검증 전입니다 (docs/API_SURVEY.md). 실제 수입 소비자가는 '실제 데이터' 화면 참고.")
 
 # ================================================================== ⑥ 가격·소비
-with tabs[5]:
+def page_syn_price():
+    _syn_title("가격·소비")
     cuts = cut_dim[cut_dim["species"] == species]
     pick6 = st.selectbox("부위 ", ["전체"] + cuts["cut_id"].tolist(), format_func=lambda x: "전체" if x == "전체" else cuts.set_index("cut_id").loc[x, "cut_name_ko"], key="p6")
     ps = A.price_series(meat, species, None if pick6 == "전체" else pick6)
@@ -432,10 +405,11 @@ with tabs[5]:
         st.plotly_chart(layout(fig, f"{dim}별 누적 소비", 300), use_container_width=True)
     st.caption(f"소매가 1% 상승 시 소비 {price_e:+.2f}%" if (price_e := A.price_elasticity(ps)) < 0 else
                f"주의: 소비-가격 단순 로그 상관이 양(+{price_e:.2f})입니다. 수요가 가격을 끌어올리는 효과가 섞여 있어 인과적 탄력성으로 해석하지 마세요.")
-    st.info("합성 데이터 탭입니다. **실제 데이터 대응:** '실제 데이터' 탭(소비자가·경락가·국산 vs 수입)과 '실제 분석·예측' 탭(경락가→소비자가 시차). 실제 소비량 데이터는 없습니다.")
+    st.info("합성 데이터 화면입니다. **실제 데이터 대응:** '실제 데이터' 화면(소비자가·경락가·국산 vs 수입)과 '실제 분석·예측' 화면(경락가→소비자가 시차). 실제 소비량 데이터는 없습니다.")
 
 # ================================================================== ⑦ 유통 병목
-with tabs[6]:
+def page_syn_flow():
+    _syn_title("유통 병목")
     fb = A.flow_bottleneck(flow, species)
     fb["flow"] = fb["from_stage"] + " → " + fb["to_stage"]
     l, r = st.columns(2)
@@ -459,7 +433,7 @@ with tabs[6]:
     st.dataframe(top.assign(월=top["month"].dt.strftime("%Y-%m"), 리드타임=top["lead"].round(2), 마진=top["margin"].round(0))[["월", "flow", "리드타임", "lead_z", "마진", "margin_z", "score"]].round(2),
                  hide_index=True, use_container_width=True)
     st.caption("한 구간의 평소 리드타임·마진 대비 얼마나 벗어났는지(z)로 병목을 봅니다. 유출/유입 비율은 구조적으로 1이 아니어서 평균 대비 변화만 해석하세요.")
-    st.info("합성 데이터 탭입니다. 단계별 물량·마진·리드타임을 제공하는 공개 데이터를 찾지 못했습니다. 경락가→소비자가 스프레드가 마진의 근사치입니다.")
+    st.info("합성 데이터 화면입니다. 단계별 물량·마진·리드타임을 제공하는 공개 데이터를 찾지 못했습니다. 경락가→소비자가 스프레드가 마진의 근사치입니다.")
 
 def _bt(df: pd.DataFrame) -> pd.DataFrame:
     """백테스트 표를 현장 말로 (모델 이름, 오차 열 이름)."""
@@ -479,7 +453,7 @@ def live_data(sig: str):
 
 
 # ================================================================== ⑨ 실제 분석·예측
-with tabs[8]:
+def page_analysis():
     st.subheader("실제 데이터 분석·예측")
     st.caption("저장된 실제 API 데이터(`data/live/`)만 사용합니다. 표본이 작아 **보조 지표**로 보세요: 월 재고 31개, 일별 가격 수개월, 경락가 수개월.")
     L = live_data(_live_sig())
@@ -492,13 +466,12 @@ with tabs[8]:
         st.markdown("#### 재고 경보")
         sa = LA.stock_alerts(stk9, kd9, k)
         last_sa = sa.iloc[-1]
-        sig_icon = {"부족": "🔴", "과잉": "🟡", "정상": "🟢"}[last_sa["signal"]]
-        st.markdown(f"{sig_icon} **{sp9}** {last_sa['month']:%Y-%m} 재고는 **{last_sa['signal']}** ({vs_normal((last_sa['stock_kg'] / last_sa['expected_kg'] - 1) * 100)}). "
-                    f"경보 기준은 사이드바의 '경보 민감도'({k})를 따릅니다.")
+        st.markdown(f"{theme.dot(last_sa['signal'])}**{sp9}** {last_sa['month']:%Y-%m} 재고는 **{last_sa['signal']}** ({vs_normal((last_sa['stock_kg'] / last_sa['expected_kg'] - 1) * 100)}). "
+                    f"경보 기준은 사이드바의 '경보 민감도'({k})를 따릅니다.", unsafe_allow_html=True)
         sd9 = (sa["stock_kg"] - sa["expected_kg"]).std()
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"] + k * sd9, line=dict(width=0), showlegend=False, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"] - k * sd9, fill="tonexty", fillcolor="rgba(46,139,87,0.12)",
+        fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"] - k * sd9, fill="tonexty", fillcolor="rgba(11,11,11,0.05)",
                                  line=dict(width=0), name="정상 범위", hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=sa["month"], y=sa["expected_kg"], name="평소 수준(추세·계절 반영)", line=dict(color=GRAY, dash="dot")))
         fig.add_trace(go.Scatter(x=sa["month"], y=sa["stock_kg"], name="실제 재고", mode="lines+markers", line=dict(color=ACTUAL, width=2)))
@@ -533,7 +506,7 @@ with tabs[8]:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=s_m.index, y=s_m.values, name="실적", line=dict(color=ACTUAL, width=2)))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=fm["index"], y=fm["lo"], fill="tonexty", fillcolor="rgba(42,157,143,0.15)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=fm["index"], y=fm["lo"], fill="tonexty", fillcolor="rgba(82,81,78,0.10)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["pred"], name=f"예측({model_name(fm['best'])})", line=dict(color=MODEL, dash="dot", width=2), mode="lines+markers"))
             st.plotly_chart(layout(fig, f"{sp9} 월 재고 3개월 예측", 320), use_container_width=True)
             st.dataframe(_bt(fm["backtest"]), hide_index=True, use_container_width=True)
@@ -550,7 +523,7 @@ with tabs[8]:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=s_d.index, y=s_d.values, name="실적", line=dict(color=ACTUAL, width=2)))
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=fd["index"], y=fd["lo"], fill="tonexty", fillcolor="rgba(42,157,143,0.15)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(x=fd["index"], y=fd["lo"], fill="tonexty", fillcolor="rgba(82,81,78,0.10)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["pred"], name=f"예측({model_name(fd['best'])})", line=dict(color=MODEL, dash="dot", width=2)))
             fig.update_yaxes(title="원/kg")
             st.plotly_chart(layout(fig, f"{it9} 소비자가 10영업일 예측", 320), use_container_width=True)
@@ -574,20 +547,20 @@ with tabs[8]:
         c1, c2 = st.columns(2)
         with c1:
             if len(ll):
-                fig = go.Figure(go.Bar(x=ll["lag"], y=ll["corr"], marker_color=[GREEN if p < 0.05 else GRAY for p in ll["p"]],
+                fig = go.Figure(go.Bar(x=ll["lag"], y=ll["corr"], marker_color=[BLUE if p < 0.05 else GRAY for p in ll["p"]],
                                        text=[f"{c:+.2f}" for c in ll["corr"]], textposition="outside"))
                 fig.update_xaxes(title="소비자가 반영 지연 (주)", dtick=1)
                 st.plotly_chart(layout(fig, f"{lbl}: 몇 주 뒤에 따라가나", 300), use_container_width=True)
                 sig_n = int((ll["p"] < 0.05).sum())
                 note = " 뚜렷한 전달 시차는 확인되지 않았습니다." if sig_n <= 1 else ""
-                st.caption(f"초록 막대는 우연으로 보기 어려운 관계입니다. 확인한 {len(ll)}개 시차 중 {sig_n}개만 그렇고, 데이터가 {int(ll['n'].min())}~{int(ll['n'].max())}주뿐이라 확정적이지 않습니다.{note}")
+                st.caption(f"파란 막대는 우연으로 보기 어려운 관계입니다. 확인한 {len(ll)}개 시차 중 {sig_n}개만 그렇고, 데이터가 {int(ll['n'].min())}~{int(ll['n'].max())}주뿐이라 확정적이지 않습니다.{note}")
             else:
                 st.info("표본이 부족합니다.")
         with c2:
             pm_m = pm9[(pm9["kind"] == kd9) & (pm9["item"] == main9)].groupby("month")["price_krw_kg"].mean()
             sp_c = LA.stock_price_corr(LA.monthly_stock(stk9, kd9), pm_m)
             if len(sp_c):
-                fig = go.Figure(go.Bar(x=sp_c["lag_months"], y=sp_c["corr"], marker_color=[GREEN if p < 0.05 else GRAY for p in sp_c["p"]],
+                fig = go.Figure(go.Bar(x=sp_c["lag_months"], y=sp_c["corr"], marker_color=[BLUE if p < 0.05 else GRAY for p in sp_c["p"]],
                                        text=[f"{c:+.2f}" for c in sp_c["corr"]], textposition="outside"))
                 fig.update_xaxes(title="재고 변화 후 가격 반영 지연 (개월)", dtick=1)
                 st.plotly_chart(layout(fig, f"{sp9} 재고가 바뀌면 {main9} 가격이 몇 달 뒤에 따라가나", 300), use_container_width=True)
@@ -607,9 +580,9 @@ with tabs[8]:
             st.info("아직 발송된 경보가 없습니다. `python -m lib.alerts` 로 지금 평가해 볼 수 있습니다.")
 
 
-with tabs[7]:
+def page_live():
     st.subheader("실제 데이터 (축산물품질평가원 OpenAPI)")
-    st.caption("[합성] 표시가 붙은 탭은 합성 CSV이고, 이 탭은 실제 API 데이터입니다. 규모가 달라 서로 비교하지 마세요 "
+    st.caption("'시연 (합성 데이터)' 화면은 합성 CSV이고, 이 화면은 실제 API 데이터입니다. 규모가 달라 서로 비교하지 마세요 "
                "(예: 실제 돼지 재고 약 1.8만 톤, 합성 약 9.2만 톤).")
     if not live.has_key():
         st.error("`.env` 에 인증키(KEY_EKAPE_DISTRIB)가 없습니다.")
@@ -692,12 +665,12 @@ with tabs[7]:
         a = ap[ap["grade"] == "평균"].sort_values("date")
         if len(a):
             k4.metric("제주 돼지 경락가", f"{a['price_krw_kg'].iloc[-1]:,.0f}원/kg", help=f"{a['date'].iloc[-1]:%Y-%m-%d}, 지육 기준")
-    if len(sk) >= 12:  # 실제 재고 기준 신호 ('실제 분석·예측' 탭과 같은 방법: 추세+계절 기대값 대비 z, 민감도는 사이드바)
+    if len(sk) >= 12:  # 실제 재고 기준 신호 ('실제 분석·예측' 화면과 같은 방법: 추세+계절 기대값 대비 z, 민감도는 사이드바)
         _sa = LA.stock_alerts(stk, kd, k).iloc[-1]
-        k5.metric(f"{sp_ko} 재고 신호 ({_sa['month']:%Y-%m})",
-                  {"부족": "🔴 이럼 안 돼지", "과잉": "🟡 넘쳐도 안 돼지", "정상": "🟢 걱정 없소"}[_sa["signal"]],
-                  vs_normal((_sa["stock_kg"] / _sa["expected_kg"] - 1) * 100), delta_color="off",
-                  help="실제 월 재고가 평소 수준(추세·계절 반영)과 얼마나 다른지로 판단합니다. 기준은 사이드바의 경보 민감도를 따릅니다. 마지막 집계 월 기준입니다.")
+        k5.markdown(theme.kpi_html(f"{sp_ko} 재고 신호 ({_sa['month']:%Y-%m})", VERDICT[_sa["signal"]],
+                                   vs_normal((_sa["stock_kg"] / _sa["expected_kg"] - 1) * 100), tone=_sa["signal"],
+                                   help="실제 월 재고가 평소 수준(추세·계절 반영)과 얼마나 다른지로 판단합니다. 기준은 사이드바의 경보 민감도를 따릅니다. 마지막 집계 월 기준입니다."),
+                    unsafe_allow_html=True)
 
     # ---- 재고
     st.markdown("#### 부위별 재고 (월)")
@@ -708,7 +681,7 @@ with tabs[7]:
         with l:
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=sk["month"], y=[mu + k * sdv] * len(sk), line=dict(width=0), showlegend=False, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=sk["month"], y=[mu - k * sdv] * len(sk), fill="tonexty", fillcolor="rgba(46,139,87,0.12)",
+            fig.add_trace(go.Scatter(x=sk["month"], y=[mu - k * sdv] * len(sk), fill="tonexty", fillcolor="rgba(11,11,11,0.05)",
                                      line=dict(width=0), name="정상 범위", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=sk["month"], y=sk["stock_kg"], name="재고", line=dict(color=ACTUAL, width=2), mode="lines+markers"))
             bad = sk[sk["z"].abs() >= k]
@@ -741,7 +714,7 @@ with tabs[7]:
     with l:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=sel["date"], y=sel["max_krw_kg"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=sel["date"], y=sel["min_krw_kg"], fill="tonexty", fillcolor="rgba(31,78,121,0.12)",
+        fig.add_trace(go.Scatter(x=sel["date"], y=sel["min_krw_kg"], fill="tonexty", fillcolor="rgba(42,120,214,0.12)",
                                  line=dict(width=0), name="지역 최저~최고", hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=sel["date"], y=sel["price_krw_kg"], name="평균", line=dict(color=ACTUAL, width=2)))
         fig.update_yaxes(title="원/kg")
@@ -775,7 +748,7 @@ with tabs[7]:
         cut = st.selectbox("부위 ", cuts, index=cuts.index("등심") if "등심" in cuts else 0, key="live_cut")
         a = ab[ab["cut"] == cut].sort_values("date")
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=a["date"], y=a["han_boxes"], name="한우 거래(박스)", marker_color="rgba(138,143,152,0.35)", yaxis="y2"))
+        fig.add_trace(go.Bar(x=a["date"], y=a["han_boxes"], name="한우 거래(박스)", marker_color="rgba(137,135,129,0.35)", yaxis="y2"))
         fig.add_trace(go.Scatter(x=a["date"], y=a["han_krw_kg"], name="한우 경락가", line=dict(color=ACTUAL, width=2)))
         fig.add_trace(go.Scatter(x=a["date"], y=a["yuk_krw_kg"], name="육우 경락가", line=dict(color=FILEFC, width=2)))
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, title="박스"))
@@ -783,7 +756,7 @@ with tabs[7]:
     else:
         a = ap[ap["grade"] == "평균"].sort_values("date")
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=a["date"], y=a["heads"], name="거래 두수", marker_color="rgba(138,143,152,0.35)", yaxis="y2"))
+        fig.add_trace(go.Bar(x=a["date"], y=a["heads"], name="거래 두수", marker_color="rgba(137,135,129,0.35)", yaxis="y2"))
         fig.add_trace(go.Scatter(x=a["date"], y=a["price_krw_kg"], name="평균 경락가", line=dict(color=ACTUAL, width=2)))
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, title="두수"))
         st.plotly_chart(layout(fig, "제주 돼지도체 경락가 (원/kg, 지육)", 340), use_container_width=True)
@@ -792,4 +765,21 @@ with tabs[7]:
     # ---- 인사이트
     st.markdown("#### 자동 인사이트 (실제 데이터)")
     for lvl, txt in live_notes:
-        st.markdown(f"{ICON[lvl]} {txt}")
+        st.markdown(f"{theme.dot(lvl)}{txt}", unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------------ 왼쪽 내비게이션
+_nav = st.navigation({
+    "오늘": [st.Page(page_today, title="오늘의 현황", url_path="today", default=True)],
+    "우리 공장": [st.Page(page_company, title="우리 공장", url_path="company")],
+    "실제 데이터": [st.Page(page_live, title="실제 데이터", url_path="live"),
+                 st.Page(page_analysis, title="실제 분석·예측", url_path="analysis")],
+    "시연 (합성 데이터)": [st.Page(page_syn_status, title="현황·경보", url_path="demo-status"),
+                      st.Page(page_syn_trend, title="수급 추이·예측", url_path="demo-trend"),
+                      st.Page(page_syn_season, title="계절성·이상치", url_path="demo-season"),
+                      st.Page(page_syn_event, title="명절·이벤트", url_path="demo-event"),
+                      st.Page(page_syn_import, title="수입국·단가", url_path="demo-import"),
+                      st.Page(page_syn_price, title="가격·소비", url_path="demo-price"),
+                      st.Page(page_syn_flow, title="유통 병목", url_path="demo-flow")],
+}, position="sidebar")
+_nav.run()
