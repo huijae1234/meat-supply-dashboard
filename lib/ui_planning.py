@@ -92,7 +92,7 @@ def render_planning():
         return
     st.markdown("#### 기존 계획과 대응안 비교")
     st.dataframe(table, hide_index=True, use_container_width=True)
-    st.caption("같은 종료일까지 비교합니다. 생산량을 줄여 부족이 사라진 경우는 개선으로 단정할 수 없습니다. 아래 주문별 계획량·납기를 함께 확인하세요. 원가 데이터가 없어 비용 비교는 하지 않습니다.")
+    st.caption("같은 종료일까지 비교합니다. 생산량을 줄여 부족이 사라진 경우는 개선으로 단정할 수 없습니다. 아래 주문별 계획량·납기를 함께 확인하세요. 대응안별 비용 비교는 하지 않습니다(제품 원료비와 단가 변동 영향은 '원가 영향' 화면).")
     if before.metrics()["계획량_kg"] != after.metrics()["계획량_kg"]:
         st.warning("대응안에서 총 계획량이 변경되었습니다. 감산·증산과 원료 확보 효과를 구분하세요.")
     changes = before.orders.set_index("계획행")[["주문번호", "제품", "날짜", "납기", "계획물량_kg", "생산가능_kg", "부족량_kg", "납기상태"]].join(

@@ -74,10 +74,13 @@ REQUIRED = {
     "recipe": ["제품", "육종", "부위", "원산지", "투입량_kg"],
 }
 OPTIONAL = {
-    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한"],
-    "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한"],
-    "plan": ["주문번호", "납기", "우선순위"], "recipe": ["보관"],
+    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg"],
+    "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg"],
+    "plan": ["주문번호", "납기", "우선순위", "판매가_원kg"], "recipe": ["보관"],
 }
+MONEY_COLUMNS = ("단가_원kg", "판매가_원kg")  # 원/kg. 비어 있어도 되지만, 적었으면 0보다 큰 숫자여야 한다
+COLUMN_ALIASES = {"단가": "단가_원kg", "매입단가": "단가_원kg", "단가원": "단가_원kg", "단가원/kg": "단가_원kg",
+                  "판매가": "판매가_원kg", "납품가": "판매가_원kg", "판매가원": "판매가_원kg", "판매가원/kg": "판매가_원kg"}
 MATERIAL_KEY = ["육종", "부위", "원산지", "보관"]
 NEEDED_FOR_CALC = ("inventory", "plan", "recipe")  # 입고 예정은 없어도 계산한다
 
@@ -90,6 +93,7 @@ def _canonical_columns(kind: str) -> dict[str, str]:
     cols = REQUIRED[kind] + OPTIONAL[kind]
     out = {_norm(c): c for c in cols}
     out.update({_norm(c.replace("_kg", "")): c for c in cols if c.endswith("_kg")})  # '재고량'도 인정
+    out.update({_norm(a): c for a, c in COLUMN_ALIASES.items() if c in cols})
     return out
 
 
@@ -183,6 +187,13 @@ def clean_table(kind: str, raw: pd.DataFrame, issues: list[Issue]) -> pd.DataFra
             return None
         if (df[c] < 0).any():
             issues.append(Issue("오류", label, f"'{c}'에 음수가 있습니다"))
+            return None
+    for c in [c for c in MONEY_COLUMNS if c in df.columns]:
+        text = df[c].astype(str).str.replace(",", "", regex=False).str.replace("원", "", regex=False).str.strip()
+        present = df[c].notna() & text.notna() & ~text.isin(["", "nan", "None", "<NA>"])
+        df[c] = pd.to_numeric(text.where(present), errors="coerce")
+        if (present & (df[c].isna() | ~np.isfinite(df[c].fillna(0)) | (df[c] <= 0))).any():
+            issues.append(Issue("오류", label, f"'{c}'는 0보다 큰 숫자(원/kg)여야 합니다. 모르면 비워 두세요."))
             return None
     for c in ("안전재고일수", "리드타임일수", "발주주기일", "우선순위"):
         if c not in df:
@@ -604,9 +615,13 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
         frame["사용상태"] = "사용가능"
         frame["사용가능일"] = d(1) if kind == "ST" else frame["입고예정일"]
         frame["사용기한"] = d(60)
+    # 단가·판매가도 설명용 가짜 값이다 (원/kg)
+    inventory["단가_원kg"] = [5500, 13000, 4200, 9500, 9000, 17000]
+    inbound["단가_원kg"] = [5900, 10200]
     plan["주문번호"] = [f"DEMO-{i+1:03d}" for i in range(len(plan))]
     plan["납기"] = plan["날짜"]
     plan["우선순위"] = 100
+    plan["판매가_원kg"] = plan["제품"].map({"프레스햄": 9000, "소시지": 8500, "베이컨": 21000, "육개장": 9000, "양념갈비": 14000})
     return {"inventory": inventory, "inbound": inbound, "plan": plan, "recipe": recipe}
 
 

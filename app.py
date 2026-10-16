@@ -770,10 +770,17 @@ def page_live():
 
 # ------------------------------------------------------------------ 왼쪽 내비게이션
 from lib.ui_planning import render_planning, render_worklog
+from lib.ui_cost import render_cost
+
+
+def page_cost():
+    render_cost(k, layout)
+
 
 _nav = st.navigation({
     "생산관리": [st.Page(page_today, title="오늘의 생산 위험", url_path="today", default=True),
                  st.Page(page_company, title="원료 소요·재고", url_path="company"),
+                 st.Page(page_cost, title="원가 영향", url_path="cost"),
                  st.Page(render_planning, title="생산 차질·대응안", url_path="planning"),
                  st.Page(render_worklog, title="조치 이력", url_path="worklog")],
     "시장 참고": [st.Page(page_live, title="실제 데이터", url_path="live"),

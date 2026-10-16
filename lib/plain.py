@@ -57,6 +57,26 @@ def change_text(pct: float, unit: str = "30일") -> str:
     return f"{unit} 전보다 {abs(pct):.1f}% {'오름' if pct > 0 else '내림'}"
 
 
+def won(v: float) -> str:
+    """원/kg 같은 작은 금액 -> '4,373원'."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return "-"
+    return f"{v:,.0f}원"
+
+
+def won_big(v: float) -> str:
+    """합계 금액 -> '1.6억원', '7,555만원'. 1만원 미만은 원 단위."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return "-"
+    sign = "-" if v < 0 else ""
+    a = abs(v)
+    if a >= 1e8:
+        return f"{sign}{a / 1e8:,.2f}억원"
+    if a >= 1e4:
+        return f"{sign}{a / 1e4:,.0f}만원"
+    return f"{sign}{a:,.0f}원"
+
+
 def kg_per_day(kg: float) -> str:
     return f"하루 {ton(kg)}"
 

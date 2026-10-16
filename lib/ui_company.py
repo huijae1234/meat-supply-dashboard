@@ -16,7 +16,7 @@ from lib import advice as A
 from lib import company as C
 from lib import live
 from lib import theme
-from lib.plain import VERDICT, VERDICT_ICON, days, md, ton, vs_normal, vs_year, change_text
+from lib.plain import VERDICT, VERDICT_ICON, days, md, ton, vs_normal, vs_year, change_text, won_big
 
 
 
@@ -97,6 +97,8 @@ def _company_block(m: A.Market) -> bool:
         return True
     from lib.ui_planning import show_impact
     show_impact(data, compact=True)
+    from lib.ui_cost import today_summary
+    today_summary(data)
     acts = A.company_actions(proj, m)
     counts = pd.Series([a["level"] for a in acts]).value_counts()
     st.caption(f"{label} · 재고 기준일 {md(proj.base_date)}")
@@ -290,7 +292,14 @@ def render_company(k: float, layout) -> None:
         "소진 예정": s["소진예정일"].map(md), "발주 기한": s["발주기한"].map(md),
         "발주량(참고)": s["발주량_kg"].map(lambda v: ton(v) if v > 0 and proj.actionable else "권고 없음"), "원료 사용 비중(차질률 아님)": s["영향제품"],
     })
+    from lib import cost as K
+    if K.has_prices(data) and proj.actionable:
+        amount = K.material_amounts(data, proj, "next").set_index("원료")["발주금액"]
+        table.insert(table.columns.get_loc("발주량(참고)") + 1, "발주 금액(참고)",
+                     s["원료"].map(amount).map(lambda v: won_big(v) if v == v and v > 0 else "-").values)
     st.dataframe(table, hide_index=True, use_container_width=True)
+    if K.has_prices(data):
+        st.caption("발주 금액은 입고 예정 단가(없으면 로트 평균) 기준 참고값입니다. 제품별 원료비와 단가 변동 영향은 '원가 영향' 화면에서 봅니다.")
 
     st.markdown("#### 3. 검토할 대응 · 자동 발주 아님")
     for a in A.company_actions(proj, m):
