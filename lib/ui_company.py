@@ -4,6 +4,7 @@ app.py가 이미 커서 화면 코드를 여기로 뺐다. 차트 스타일(layo
 """
 from __future__ import annotations
 
+import copy
 import hmac
 import os
 import hashlib
@@ -98,6 +99,8 @@ def _company_block(m: A.Market) -> bool:
     from lib.ui_planning import show_impact
     show_impact(data, compact=True)
     from lib.ui_cost import today_summary
+    from lib.ui_thaw import today_summary as thaw_summary
+    thaw_summary(data)
     today_summary(data)
     acts = A.company_actions(proj, m)
     counts = pd.Series([a["level"] for a in acts]).value_counts()
@@ -245,7 +248,7 @@ def render_company(k: float, layout) -> None:
 
     with st.expander("기본값 조정 (CSV에 안전재고일수·리드타임일수·발주주기일을 안 적은 원료에 적용)"):
         saved_settings = get_settings()
-        draft_settings = C.Settings()
+        draft_settings = copy.deepcopy(saved_settings)  # 해동 값 등 이 칸에 없는 설정은 그대로 둔다
         a, b, c = st.columns(3)
         a.markdown("**안전재고 (일치)**")
         for (o, sto), v in C.DEFAULT_SAFETY.items():
@@ -294,7 +297,7 @@ def render_company(k: float, layout) -> None:
     })
     from lib import cost as K
     if K.has_prices(data) and proj.actionable:
-        amount = K.material_amounts(data, proj, "next").set_index("원료")["발주금액"]
+        amount = K.material_amounts(data, proj, "next", settings=get_settings()).set_index("원료")["발주금액"]
         table.insert(table.columns.get_loc("발주량(참고)") + 1, "발주 금액(참고)",
                      s["원료"].map(amount).map(lambda v: won_big(v) if v == v and v > 0 else "-").values)
     st.dataframe(table, hide_index=True, use_container_width=True)

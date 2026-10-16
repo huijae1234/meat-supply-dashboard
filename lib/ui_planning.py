@@ -9,7 +9,8 @@ from lib import company as C, planning as P, worklog as W
 
 def show_impact(data, compact=False):
     try:
-        result = P.simulate(data)
+        from lib import ui_company as UC
+        result = P.simulate(data, settings=UC.get_settings())
     except ValueError as exc:
         st.warning(str(exc))
         return None
@@ -86,7 +87,8 @@ def render_planning():
         st.dataframe(pd.DataFrame([vars(i) for i in candidate.issues if i.level == "오류"]), hide_index=True)
         return
     try:
-        before, after, table = P.comparison(data, candidate)
+        from lib import ui_company as UC
+        before, after, table = P.comparison(data, candidate, UC.get_settings())
     except ValueError as exc:
         st.warning(str(exc))
         return

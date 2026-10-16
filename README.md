@@ -58,6 +58,7 @@
 |---|---|---|
 | 오늘의 생산 위험 | 영향 제품·부족 물량, 원료 경보, 참고 시장 신호 | 공공데이터 + 입력 CSV 또는 샘플 |
 | 원료 소요·재고 | CSV 양식·입력 검증, 사용 가능 재고·소진일·발주일·발주량, 예상 순수급 | 사용자가 넣은 CSV |
+| 해동 계획 | 냉동 원료 해동 시작일·로트별 냉동 투입량(감량 반영), 주말·휴무일과 해동실 용량을 고려한 앞당김(해동 후 보관 한도), 해동 시간·재고 부족, 지시 목록 내려받기 | 입력 CSV 또는 샘플 |
 | 원가 영향 | 제품 1kg당 원료비·원료비율, 단가 변동 가정(직접 입력·경락가/소비자가 30일 변화율), 계획 기간 원료비·발주 금액 | 입력 CSV의 단가·판매가 또는 샘플 |
 | 생산 차질·대응안 | 원료 기준 생산 가능량, 주문별 영향, 대응 전후 비교·내보내기 | 입력 CSV의 복사본 또는 샘플 |
 | 조치 이력 | 담당·기한·진행 상태·근거·결과, 변경 이력과 내보내기 | 로컬 저장 / 샘플은 세션 한정 |
@@ -121,6 +122,7 @@ API 키는 `.env`에만 두며 Git에 포함하지 않습니다. 수집한 실�
 | [lib/analysis.py](lib/analysis.py), [lib/live_analysis.py](lib/live_analysis.py) | 합성·실제 데이터 분석과 예측 |
 | [lib/company.py](lib/company.py), [lib/advice.py](lib/advice.py) | 원료 소진·발주 계산과 행동 안내 |
 | [lib/planning.py](lib/planning.py), [lib/ui_planning.py](lib/ui_planning.py) | 제품별 원료 배분·대응안 비교와 입력 화면 |
+| [lib/thaw.py](lib/thaw.py), [lib/ui_thaw.py](lib/ui_thaw.py) | 해동 일정·해동실 용량 배분과 화면 |
 | [lib/cost.py](lib/cost.py), [lib/ui_cost.py](lib/ui_cost.py) | 로트 단가·배합표 기반 원료비, 단가 변동 가정, 매입 금액 |
 | [lib/worklog.py](lib/worklog.py) | 계산 근거와 조치 버전의 로컬 저장 |
 | [lib/alerts.py](lib/alerts.py) | 경보 규칙, 이력과 중복 방지 |

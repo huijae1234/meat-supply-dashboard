@@ -35,7 +35,7 @@ def fingerprint(data: C.CompanyData) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
-def simulate(data: C.CompanyData, end_date=None) -> Feasibility:
+def simulate(data: C.CompanyData, end_date=None, settings: C.Settings | None = None) -> Feasibility:
     if not data.ready():
         raise ValueError("입력 오류를 먼저 수정해 주세요.")
     base = data.inventory["기준일"].max()
@@ -50,7 +50,7 @@ def simulate(data: C.CompanyData, end_date=None) -> Feasibility:
     recipes = {}
     for product, group in data.recipe.groupby("제품"):
         recipes[product] = group.groupby(C.MATERIAL_KEY)["투입량_kg"].sum().to_dict()
-    lots = C.material_lots(data)
+    lots = C.material_lots(data, settings)
     keys = sorted(set(lot["key"] for lot in lots) | {key for rec in recipes.values() for key in rec})
     orders, material_days = [], []
     for day in pd.date_range(base + pd.Timedelta(days=1), end):
@@ -94,12 +94,12 @@ def change_scenario(data: C.CompanyData, plan=None, inbound=None) -> C.CompanyDa
     return result
 
 
-def comparison(before: C.CompanyData, after: C.CompanyData) -> tuple[Feasibility, Feasibility, pd.DataFrame]:
+def comparison(before: C.CompanyData, after: C.CompanyData, settings: C.Settings | None = None) -> tuple[Feasibility, Feasibility, pd.DataFrame]:
     if not before.ready() or not after.ready():
         raise ValueError("입력 오류를 먼저 수정해 주세요.")
     # 같은 기간을 비교한다. 계획 삭제·감산도 숨기지 않고 계획량 차이로 표시한다.
     end = max(before.plan["날짜"].max(), after.plan["날짜"].max())
-    a, b = simulate(before, end), simulate(after, end)
+    a, b = simulate(before, end, settings), simulate(after, end, settings)
     av, bv = a.metrics(), b.metrics()
     table = pd.DataFrame([{"지표": key, "기존": value, "대응안": bv[key], "변화": bv[key] - value} for key, value in av.items()])
     return a, b, table

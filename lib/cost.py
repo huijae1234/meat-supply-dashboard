@@ -142,23 +142,34 @@ def _plan_future(data: C.CompanyData) -> pd.DataFrame:
     return data.plan[data.plan["날짜"] > data.inventory["기준일"].max()]
 
 
-def components(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, float] | None = None) -> pd.DataFrame:
-    """제품 x 원료 원료비 구성 (원/제품kg)."""
+def thaw_loss(data: C.CompanyData, key: tuple, settings: C.Settings | None = None) -> float:
+    """원료의 해동 감량률(%). 냉장은 0. 재고 CSV에 값이 있으면 그 값, 없으면 기본값."""
+    inv = data.inventory
+    rows = inv[(inv[C.MATERIAL_KEY] == pd.Series(key, index=C.MATERIAL_KEY)).all(axis=1)]
+    return C.lot_thaw(rows.iloc[0] if len(rows) else {}, key[2], key[3], settings or C.Settings())[1]
+
+
+def components(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, float] | None = None,
+               settings: C.Settings | None = None) -> pd.DataFrame:
+    """제품 x 원료 원료비 구성 (원/제품kg). 냉동 원료는 해동 감량만큼 더 사야 하므로 단가 ÷ (1 − 감량률)로 본다."""
     price = unit_price(material_prices(data), basis)
     pct = change_pct or {}
     rows = []
     for (product, *key), ratio in data.recipe.groupby(["제품"] + C.MATERIAL_KEY)["투입량_kg"].sum().items():
         label = C.ingredient_label(*key)
         p, src = price.get(label, (math.nan, "단가 없음"))
-        p2 = p * (1 + pct.get(label, 0.0) / 100)
-        rows.append({"제품": product, "원료": label, "투입량_kg": ratio, "단가": p, "가정단가": p2, "근거": src,
-                     "원료비": ratio * p, "가정원료비": ratio * p2})
+        loss = thaw_loss(data, tuple(key), settings)
+        eff = p / (1 - loss / 100)
+        eff2 = eff * (1 + pct.get(label, 0.0) / 100)
+        rows.append({"제품": product, "원료": label, "투입량_kg": ratio, "단가": p, "해동감량률": loss,
+                     "해동후단가": eff, "가정단가": eff2, "근거": src, "원료비": ratio * eff, "가정원료비": ratio * eff2})
     return pd.DataFrame(rows)
 
 
-def product_costs(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, float] | None = None) -> pd.DataFrame:
+def product_costs(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, float] | None = None,
+                  settings: C.Settings | None = None) -> pd.DataFrame:
     """제품별 kg당 원료비 (현재·가정), 판매가 대비 원료비율, 명시된 계획 기간의 원료비 합계."""
-    comp = components(data, basis, change_pct)
+    comp = components(data, basis, change_pct, settings)
     plan = _plan_future(data)
     rows = []
     for product, g in comp.groupby("제품", sort=False):
@@ -181,8 +192,11 @@ def product_costs(data: C.CompanyData, basis: str = "avg", change_pct: dict[str,
 
 
 def material_amounts(data: C.CompanyData, proj: C.Projection, basis: str = "next",
-                     change_pct: dict[str, float] | None = None, days: int = 14) -> pd.DataFrame:
-    """원료별 앞으로 N일 소요 금액과 발주 검토량 금액 (원). 재구매 기준 단가를 기본으로 쓴다."""
+                     change_pct: dict[str, float] | None = None, days: int = 14, settings: C.Settings | None = None) -> pd.DataFrame:
+    """원료별 앞으로 N일 소요 금액과 발주 검토량 금액 (원). 재구매 기준 단가를 기본으로 쓴다.
+
+    소요량은 해동 후 무게라 냉동 원료는 ÷ (1 − 감량률)로 매입 무게로 바꿔 금액을 낸다. 발주량은 이미 냉동(매입) 무게다.
+    """
     price = unit_price(material_prices(data), basis)
     pct = change_pct or {}
     first = proj.daily[proj.daily["날짜"] <= proj.base_date + pd.Timedelta(days=days)]
@@ -192,7 +206,9 @@ def material_amounts(data: C.CompanyData, proj: C.Projection, basis: str = "next
         p, src = price.get(r["원료"], (math.nan, "단가 없음"))
         p2 = p * (1 + pct.get(r["원료"], 0.0) / 100)
         order = float(r["발주량_kg"]) if proj.actionable else 0.0
+        loss = thaw_loss(data, (r["육종"], r["부위"], r["원산지"], r["보관"]), settings)
+        buy = float(need.get(r["원료"], 0.0)) / (1 - loss / 100)
         rows.append({"원료": r["원료"], "적용단가": p2, "근거": src, f"{days}일소요_kg": float(need.get(r["원료"], 0.0)),
-                     f"{days}일소요금액": float(need.get(r["원료"], 0.0)) * p2,
+                     f"{days}일소요금액": buy * p2,
                      "발주검토량_kg": order, "발주금액": order * p2 if order > 0 else 0.0})
     return pd.DataFrame(rows)

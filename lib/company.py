@@ -32,6 +32,10 @@ DEFAULT_SAFETY = {("국산", "냉장"): 5, ("국산", "냉동"): 10, ("수입", 
 DEFAULT_LEAD = {"국산": 2, "수입": 30}
 ROUND_KG = 100  # 발주량은 100kg 단위로 올림
 DEFAULT_CYCLE = {"국산": 3, "수입": 14}  # 발주 주기(일). 한 번 발주로 안전재고 + 이 기간 사용량까지 채운다
+DEFAULT_THAW_DAYS = {"국산": 1, "수입": 2}      # 냉동 원료: 해동 시작 -> 생산 투입까지 일수 (설명용 초기값)
+DEFAULT_THAW_LOSS = {"국산": 2.0, "수입": 3.0}  # 냉동 원료: 해동 감량률(%). 배합표 투입량은 해동 후 무게 기준
+DEFAULT_THAW_WEEKDAYS = [0, 1, 2, 3, 4]         # 해동실에 넣을 수 있는 요일 (월=0 … 일=6)
+DEFAULT_THAW_HOLD = 2                            # 해동이 끝난 뒤 쓰기 전까지 냉장 대기 최대 일수 (설명용 초기값)
 
 # 부위 목록: 현장 부위명 -> 시장 데이터 연결 키 (stock = 부위별 재고의 부위명, price = 소비자가 품목명)
 PARTS = {
@@ -74,8 +78,8 @@ REQUIRED = {
     "recipe": ["제품", "육종", "부위", "원산지", "투입량_kg"],
 }
 OPTIONAL = {
-    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg"],
-    "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg"],
+    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률"],
+    "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률"],
     "plan": ["주문번호", "납기", "우선순위", "판매가_원kg"], "recipe": ["보관"],
 }
 MONEY_COLUMNS = ("단가_원kg", "판매가_원kg")  # 원/kg. 비어 있어도 되지만, 적었으면 0보다 큰 숫자여야 한다
@@ -179,7 +183,7 @@ def clean_table(kind: str, raw: pd.DataFrame, issues: list[Issue]) -> pd.DataFra
             issues.append(Issue("오류", label, f"보관은 냉장/냉동 중 하나여야 합니다: {', '.join(bad)}"))
             return None
 
-    for c in [c for c in df.columns if c.endswith("_kg")] + [c for c in ("안전재고일수", "리드타임일수", "발주주기일") if c in df.columns]:
+    for c in [c for c in df.columns if c.endswith("_kg")] + [c for c in ("안전재고일수", "리드타임일수", "발주주기일", "해동일수", "해동감량률") if c in df.columns]:
         df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "", regex=False), errors="coerce")
     for c in [c for c in df.columns if c.endswith("_kg")]:
         if df[c].isna().any() or not np.isfinite(df[c]).all():
@@ -195,14 +199,20 @@ def clean_table(kind: str, raw: pd.DataFrame, issues: list[Issue]) -> pd.DataFra
         if (present & (df[c].isna() | ~np.isfinite(df[c].fillna(0)) | (df[c] <= 0))).any():
             issues.append(Issue("오류", label, f"'{c}'는 0보다 큰 숫자(원/kg)여야 합니다. 모르면 비워 두세요."))
             return None
-    for c in ("안전재고일수", "리드타임일수", "발주주기일", "우선순위"):
+    if "해동감량률" in df:
+        raw_values = raw.rename(columns={x: canon.get(_norm(x), x) for x in raw.columns})["해동감량률"].reindex(df.index)
+        present = raw_values.notna() & raw_values.astype(str).str.strip().ne("")
+        if (present & (df["해동감량률"].isna() | (df["해동감량률"] < 0) | (df["해동감량률"] >= 50))).any():
+            issues.append(Issue("오류", label, "해동감량률은 0~50 미만의 숫자(%)여야 합니다"))
+            return None
+    for c in ("안전재고일수", "리드타임일수", "발주주기일", "해동일수", "우선순위"):
         if c not in df:
             continue
         raw_values = raw.rename(columns={x: canon.get(_norm(x), x) for x in raw.columns})[c].reindex(df.index)
         present = raw_values.notna() & raw_values.astype(str).str.strip().ne("")
         df[c] = pd.to_numeric(df[c], errors="coerce")
         minimum = 1 if c in ("발주주기일", "우선순위") else 0
-        maximum = {"안전재고일수": 90, "리드타임일수": 120, "발주주기일": 60, "우선순위": 1000000}[c]
+        maximum = {"안전재고일수": 90, "리드타임일수": 120, "발주주기일": 60, "해동일수": 14, "우선순위": 1000000}[c]
         if (present & (df[c].isna() | ~np.isfinite(df[c]) | (df[c] < minimum) | (df[c] > maximum) | (df[c] % 1 != 0))).any():
             issues.append(Issue("오류", label, f"{c}는 {minimum}~{maximum} 범위의 정수여야 합니다"))
             return None
@@ -299,7 +309,8 @@ def _cross_check(d: CompanyData) -> None:
         no_stock = sorted(ingredient_label(*key) for key in need - inv_keys)
         if no_stock:
             d.issues.append(Issue("경고", "재고", "배합표에 쓰이지만 재고가 없는 원료(재고 0으로 계산): " + ", ".join(no_stock)))
-        dup = d.inventory.duplicated(["기준일", "육종", "부위", "원산지", "보관"], keep=False)
+        cols = ["기준일", "육종", "부위", "원산지", "보관"] + (["로트"] if "로트" in d.inventory else [])  # 로트가 다르면 중복이 아니다
+        dup = d.inventory.duplicated(cols, keep=False)
         if dup.any():
             d.issues.append(Issue("경고", "재고", "같은 날짜·원료·보관의 중복 행이 있어 합산합니다"))
     if d.plan is not None and d.plan["날짜"].min() > (d.inventory["기준일"].max() if d.inventory is not None else d.plan["날짜"].min()) + timedelta(days=3):
@@ -323,6 +334,23 @@ class Settings:
     safety: dict = field(default_factory=lambda: dict(DEFAULT_SAFETY))
     lead: dict = field(default_factory=lambda: dict(DEFAULT_LEAD))
     cycle: dict = field(default_factory=lambda: dict(DEFAULT_CYCLE))
+    thaw_days: dict = field(default_factory=lambda: dict(DEFAULT_THAW_DAYS))
+    thaw_loss: dict = field(default_factory=lambda: dict(DEFAULT_THAW_LOSS))
+    thaw_capacity: int = 0  # 해동실 하루 최대 투입량(kg, 냉동 무게). 0 = 제한 없음
+    thaw_weekdays: list = field(default_factory=lambda: list(DEFAULT_THAW_WEEKDAYS))
+    holidays: list = field(default_factory=list)   # 'YYYY-MM-DD' 휴무일 (해동 투입 불가)
+    thaw_hold: int = DEFAULT_THAW_HOLD
+
+    def can_start(self, day: pd.Timestamp) -> bool:
+        """해동실에 넣을 수 있는 날인지 (작업 요일이고 휴무일이 아님)."""
+        return day.weekday() in self.thaw_weekdays and f"{day:%Y-%m-%d}" not in self.holidays
+
+    def next_start(self, day: pd.Timestamp, limit: int = 60) -> pd.Timestamp | None:
+        for i in range(limit):
+            d = day + pd.Timedelta(days=i)
+            if self.can_start(d):
+                return d
+        return None
 
 
 def today_kst() -> pd.Timestamp:
@@ -344,7 +372,10 @@ def load_settings() -> Settings:
     if not path.exists():
         return Settings()
     value = json.loads(path.read_text(encoding="utf-8"))
-    result = Settings(safety={tuple(k.split("/")): v for k, v in value["safety"].items()}, lead=value["lead"], cycle=value["cycle"])
+    result = Settings(safety={tuple(k.split("/")): v for k, v in value["safety"].items()}, lead=value["lead"], cycle=value["cycle"],
+                      thaw_days=value.get("thaw_days", dict(DEFAULT_THAW_DAYS)), thaw_loss=value.get("thaw_loss", dict(DEFAULT_THAW_LOSS)),
+                      thaw_capacity=value.get("thaw_capacity", 0), thaw_weekdays=value.get("thaw_weekdays", list(DEFAULT_THAW_WEEKDAYS)),
+                      holidays=value.get("holidays", []), thaw_hold=value.get("thaw_hold", DEFAULT_THAW_HOLD))  # 예전 설정 파일에는 해동 값이 없다
     _validate_settings(result)
     return result
 
@@ -353,6 +384,22 @@ def _validate_settings(settings: Settings) -> None:
     for values, defaults, low, high in ((settings.safety, DEFAULT_SAFETY, 0, 90), (settings.lead, DEFAULT_LEAD, 0, 120), (settings.cycle, DEFAULT_CYCLE, 1, 60)):
         if set(values) != set(defaults) or any(not isinstance(v, (int, float)) or not math.isfinite(v) or v != int(v) or not low <= v <= high for v in values.values()):
             raise ValueError("저장된 기본값이 올바르지 않습니다. 설정 파일을 확인하세요.")
+    td, tl, cap = settings.thaw_days, settings.thaw_loss, settings.thaw_capacity
+    if set(td) != set(DEFAULT_THAW_DAYS) or any(not isinstance(v, (int, float)) or v != int(v) or not 0 <= v <= 14 for v in td.values()):
+        raise ValueError("해동일수 기본값은 0~14 정수여야 합니다.")
+    if set(tl) != set(DEFAULT_THAW_LOSS) or any(not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v < 50 for v in tl.values()):
+        raise ValueError("해동감량률 기본값은 0~50 미만이어야 합니다.")
+    if not isinstance(cap, (int, float)) or cap != int(cap) or not 0 <= cap <= 1_000_000:
+        raise ValueError("해동실 용량은 0~1,000,000kg 정수여야 합니다.")
+    wd = settings.thaw_weekdays
+    if not isinstance(wd, list) or not wd or any(not isinstance(v, int) or not 0 <= v <= 6 for v in wd) or len(set(wd)) != len(wd):
+        raise ValueError("해동 투입 요일을 하나 이상 골라 주세요.")
+    if not isinstance(settings.holidays, list) or any(not isinstance(v, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) for v in settings.holidays):
+        raise ValueError("휴무일은 2026-10-09 형식이어야 합니다.")
+    for v in settings.holidays:
+        pd.Timestamp(v)  # 없는 날짜면 오류
+    if not isinstance(settings.thaw_hold, int) or not 0 <= settings.thaw_hold <= 14:
+        raise ValueError("해동 후 보관 한도는 0~14일 정수여야 합니다.")
 
 
 def save_settings(settings: Settings) -> None:
@@ -360,7 +407,9 @@ def save_settings(settings: Settings) -> None:
     COMPANY_DIR.mkdir(parents=True, exist_ok=True)
     target = COMPANY_DIR / "settings.json"
     temp = target.with_suffix(".tmp")
-    temp.write_text(json.dumps({"safety": {"/".join(k): v for k, v in settings.safety.items()}, "lead": settings.lead, "cycle": settings.cycle}, ensure_ascii=False), encoding="utf-8")
+    temp.write_text(json.dumps({"safety": {"/".join(k): v for k, v in settings.safety.items()}, "lead": settings.lead, "cycle": settings.cycle,
+                                "thaw_days": settings.thaw_days, "thaw_loss": settings.thaw_loss, "thaw_capacity": int(settings.thaw_capacity),
+                                "thaw_weekdays": sorted(settings.thaw_weekdays), "holidays": sorted(settings.holidays), "thaw_hold": settings.thaw_hold}, ensure_ascii=False), encoding="utf-8")
     temp.replace(target)
 
 
@@ -395,8 +444,24 @@ def _plan_daily(plan: pd.DataFrame, base: pd.Timestamp, dates: pd.DatetimeIndex,
     return out.fillna(0.0)
 
 
-def material_lots(data: CompanyData) -> list[dict]:
-    """입고·검사 상태·해동 준비일·사용기한을 반영한 로트. 품질 판정은 입력값만 사용한다."""
+def lot_thaw(r, origin: str, storage: str, settings: Settings) -> tuple[int, float]:
+    """(해동일수, 감량률%) — 냉장은 (0, 0). CSV 값이 있으면 그 값, 없으면 기본값."""
+    if storage != "냉동":
+        return 0, 0.0
+    days_ = r.get("해동일수") if hasattr(r, "get") else None
+    loss = r.get("해동감량률") if hasattr(r, "get") else None
+    days_ = int(days_) if days_ is not None and pd.notna(days_) else int(settings.thaw_days[origin])
+    loss = float(loss) if loss is not None and pd.notna(loss) else float(settings.thaw_loss[origin])
+    return days_, loss
+
+
+def material_lots(data: CompanyData, settings: Settings | None = None) -> list[dict]:
+    """입고·검사 상태·해동·사용기한을 반영한 로트. 품질 판정은 입력값만 사용한다.
+
+    냉동 로트: 수량은 해동 후 무게(냉동 무게 x (1 - 감량률))로 쓴다. 사용가능일을 적었으면 그날(이미 해동 중인 로트),
+    안 적었으면 들어온 날(재고는 기준일 다음 날) 해동을 시작해 해동일수 뒤부터 쓴다고 본다.
+    """
+    st_ = settings or Settings()
     base = data.inventory["기준일"].max()
     lots = []
     for kind, df, qty in (("inventory", data.inventory, "재고량_kg"), ("inbound", data.inbound, "입고량_kg")):
@@ -406,10 +471,20 @@ def material_lots(data: CompanyData) -> list[dict]:
             arrival = base + pd.Timedelta(days=1) if kind == "inventory" else r["입고예정일"]
             if kind == "inbound" and arrival <= base:
                 continue
-            ready = max(arrival, r["사용가능일"]) if pd.notna(r["사용가능일"]) else arrival
-            lots.append({"key": tuple(r[c] for c in MATERIAL_KEY), "id": str(r.get("로트", f"{kind}-{i}")),
-                         "qty": float(r[qty]), "ready": ready, "arrival": arrival,
-                         "expires": r["사용기한"], "status": r["사용상태"], "kind": kind})
+            key = tuple(r[c] for c in MATERIAL_KEY)
+            thaw_days, loss = lot_thaw(r, key[2], key[3], st_)
+            explicit = pd.notna(r["사용가능일"])
+            if explicit:
+                ready = max(arrival, r["사용가능일"])
+            elif thaw_days:
+                start = st_.next_start(arrival)  # 휴무일·주말에는 해동실에 넣지 않는다
+                ready = (start + pd.Timedelta(days=thaw_days)) if start is not None else pd.Timestamp.max
+            else:
+                ready = arrival
+            lots.append({"key": key, "id": str(r.get("로트", f"{kind}-{i}")),
+                         "qty": float(r[qty]) * (1 - loss / 100), "frozen_qty": float(r[qty]), "ready": ready, "arrival": arrival,
+                         "expires": r["사용기한"], "status": r["사용상태"], "kind": kind,
+                         "thaw_days": thaw_days, "loss": loss, "explicit_ready": bool(explicit)})
     return lots
 
 
@@ -466,7 +541,7 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
             inbound_by[k] = g.groupby("입고예정일")["입고량_kg"].sum().reindex(dates, fill_value=0.0)
 
     rows, daily_parts = [], []
-    all_lots = material_lots(data)
+    all_lots = material_lots(data, st_)
     stale = freshness(data, today) if today is not None else ""
     if stale:
         notes.append(stale)
@@ -490,6 +565,10 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
         inc = inbound_by.get(k, pd.Series(0.0, index=dates))
         lots = [dict(lot) for lot in all_lots if lot["key"] == k]
         usable0 = sum(lot["qty"] for lot in available_lots(lots, k, dates[0]) if lot["kind"] == "inventory")
+        # 재고일수는 해동 대기 중인 냉동 재고까지 포함한 보유분으로 센다 (첫날 사용 가능분과 별도)
+        hold0 = sum(lot["qty"] for lot in lots if lot["kind"] == "inventory" and lot["status"] == "사용가능"
+                    and (pd.isna(lot["expires"]) or lot["expires"] >= dates[0]))
+        thaw_t, thaw_loss = lot_thaw(g_inv.iloc[0] if len(g_inv) else {}, origin, storage, st_)
         missing, balances = 0.0, []
         for day in dates:
             missing += take(lots, k, day, float(dem.loc[day]))
@@ -499,13 +578,13 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
         safety_qty = safety_days * avg7
 
         cum_dem = dem.cumsum()
-        run_no_inbound = cum_dem[cum_dem > usable0]
+        run_no_inbound = cum_dem[cum_dem > hold0]
         if avg7 <= 0:
             cover_days = math.inf
         elif len(run_no_inbound):
-            i = int((cum_dem > usable0).values.argmax())
+            i = int((cum_dem > hold0).values.argmax())
             prev = float(cum_dem.iloc[i - 1]) if i > 0 else 0.0
-            cover_days = i + (usable0 - prev) / max(float(dem.iloc[i]), 1e-9)
+            cover_days = i + (hold0 - prev) / max(float(dem.iloc[i]), 1e-9)
         else:
             cover_days = math.inf
         neg = stock[stock < 0]
@@ -513,30 +592,32 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
         below = stock[stock < safety_qty - 1e-9] if safety_qty > 0 else stock[stock < 0]
         breach = below.index[0] if len(below) else None
         arrival = ref + timedelta(days=int(lead_days))
+        start_at = st_.next_start(arrival) if thaw_t else arrival  # 냉동은 들어온 뒤 해동 가능한 날 넣어 해동일수가 지나야 쓴다
+        ready_at = (start_at or arrival) + timedelta(days=int(thaw_t))
 
         status, order_qty, order_by, gap = "정상", 0.0, None, 0.0
         under_days, under_end = 0, None
         if breach is not None:
-            eff = max(breach, arrival)
+            eff = max(breach, ready_at)
             at_arrival = float(stock.loc[eff]) if eff in stock.index else float(stock.iloc[-1])
             target = safety_qty + cycle_days * avg7  # 도착 시점에 맞춰 둘 목표 재고
-            order_qty = max(target - at_arrival, 0.0)
+            order_qty = max(target - at_arrival, 0.0) / (1 - thaw_loss / 100)  # 해동 후 필요량 -> 사야 할 냉동 무게
             order_qty = math.ceil(order_qty / ROUND_KG) * ROUND_KG if order_qty > 0 else 0.0
-            order_by = max(eff - timedelta(days=int(lead_days)), ref)
-            pre = stock[stock.index < arrival]
+            order_by = max(eff - timedelta(days=int(lead_days + thaw_t)), ref)
+            pre = stock[stock.index < ready_at]
             gap = float(max(-pre.min(), 0.0)) if len(pre) else 0.0
             low = pre[pre < safety_qty - 1e-9]
             under_days = int(len(low))                        # 입고 전 안전재고 아래로 지내는 실제 일수 (이미 잡힌 입고로 회복되면 그만큼 뺀다)
             under_end = low.index[-1] if len(low) else None
-            if runout is not None and runout < arrival:
+            if runout is not None and runout < ready_at:
                 status = "긴급"
             elif order_qty > 0 and (order_by - ref).days <= cycle_days:
                 status = "발주필요"  # 이번 발주 주기 안에 발주해야 하는 것만 '할 일'로 올린다 (더 먼 것은 발주 기한만 보여준다)
         if status == "정상" and avg7 > 0:
             over_days = max(safety_days * 4, 20)
-            if (s0 + float(inc.sum())) / avg7 > over_days:
+            if (hold0 + float(inc.sum()) * (1 - thaw_loss / 100)) / avg7 > over_days:
                 status = "과잉"
-        if breach is not None and max(breach, arrival) > dates[-1]:
+        if breach is not None and max(breach, ready_at) > dates[-1]:
             status, order_qty = "확인필요", 0.0
             notes.append(f"{ingredient_label(*k)}의 예상 입고가 {horizon}일 계산 범위를 벗어나 발주량 권고를 중단했습니다")
 
@@ -544,7 +625,7 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
             "육종": species, "부위": part, "원산지": origin, "보관": storage, "원료": ingredient_label(*k),
             "현재고_kg": s0, "초기사용가능_kg": usable0, "일평균사용_kg": avg7, "재고일수": cover_days, "안전재고일수": safety_days,
             "리드타임일수": lead_days, "소진예정일": runout, "안전재고이하일": breach, "상태": "확인필요" if stale else status,
-            "발주기한": order_by, "발주량_kg": order_qty, "공백량_kg": gap, "가장빠른입고일": arrival, "안전재고미달일수": under_days, "안전재고미달종료일": under_end, "발주주기일": cycle_days, "영향제품": _share_text(prod_dem.get(k, {})), "입고예정_kg": float(inc.sum()),
+            "발주기한": order_by, "발주량_kg": order_qty, "공백량_kg": gap, "가장빠른입고일": arrival, "가장빠른사용가능일": ready_at, "해동일수": thaw_t, "해동감량률": thaw_loss, "안전재고미달일수": under_days, "안전재고미달종료일": under_end, "발주주기일": cycle_days, "영향제품": _share_text(prod_dem.get(k, {})), "입고예정_kg": float(inc.sum()),
         })
         daily_parts.append(pd.DataFrame({"원료": ingredient_label(*k), "날짜": dates, "예상재고_kg": stock.values,
                                           "소요량_kg": dem.values, "입고_kg": inc.values, "안전재고_kg": safety_qty}))
@@ -588,7 +669,8 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
     inventory = pd.DataFrame([
         [d(0), "돼지", "앞다리", "국산", "냉장", 9000, None, None],
         [d(0), "돼지", "삼겹살", "국산", "냉장", 5200, None, None],
-        [d(0), "돼지", "뒷다리", "수입", "냉동", 42000, None, None],
+        [d(0), "돼지", "뒷다리", "수입", "냉동", 6000, None, None],   # 해동실에 들어가 있는 로트 (사용가능일 = 내일)
+        [d(0), "돼지", "뒷다리", "수입", "냉동", 36000, None, None],  # 냉동 창고 로트 (해동 일정을 계산)
         [d(0), "소", "양지", "수입", "냉동", 2000, None, None],
         [d(0), "돼지", "갈비", "국산", "냉장", 15000, None, None],
         [d(0), "소", "사태", "국산", "냉장", 2300, 4, 2],
@@ -614,9 +696,11 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
         frame["로트"] = [f"{kind}-{i+1:03d}" for i in range(len(frame))]
         frame["사용상태"] = "사용가능"
         frame["사용가능일"] = d(1) if kind == "ST" else frame["입고예정일"]
+        frame.loc[frame["보관"] == "냉동", "사용가능일"] = None  # 냉동은 해동일수로 계산
         frame["사용기한"] = d(60)
+    inventory.loc[inventory["로트"].isin(["ST-003", "ST-005"]), "사용가능일"] = d(1)  # 뒷다리 6톤·양지는 이미 해동 중
     # 단가·판매가도 설명용 가짜 값이다 (원/kg)
-    inventory["단가_원kg"] = [5500, 13000, 4200, 9500, 9000, 17000]
+    inventory["단가_원kg"] = [5500, 13000, 4200, 4200, 9500, 9000, 17000]
     inbound["단가_원kg"] = [5900, 10200]
     plan["주문번호"] = [f"DEMO-{i+1:03d}" for i in range(len(plan))]
     plan["납기"] = plan["날짜"]

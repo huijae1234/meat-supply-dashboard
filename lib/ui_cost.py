@@ -98,7 +98,8 @@ def today_summary(data: C.CompanyData) -> None:
     if not K.has_prices(data):
         return
     chg = {n: v for n, (v, _) in K.auction_changes(data).items()}
-    prod = K.product_costs(data, "avg", chg)
+    from lib import ui_company as UC
+    prod = K.product_costs(data, "avg", chg, UC.get_settings())
     ok = prod[prod["단가없는원료"] == ""]
     if not len(ok):
         return
@@ -164,8 +165,9 @@ def render_cost(k: float, layout) -> None:
         market = A.Market()
     pct = _assumption_editor(data, prices, basis, market)
 
-    prod = K.product_costs(data, basis, pct)
-    comp = K.components(data, basis, pct)
+    settings = UC.get_settings()
+    prod = K.product_costs(data, basis, pct, settings)
+    comp = K.components(data, basis, pct, settings)
     st.markdown("#### 3. 제품별 원료비")
     ok = prod[prod["단가없는원료"] == ""]
     if len(ok) < len(prod):
@@ -200,13 +202,14 @@ def render_cost(k: float, layout) -> None:
         st.plotly_chart(_cost_chart(comp[comp["제품"].isin(ok["제품"])], ok, layout), use_container_width=True)
         st.caption("막대는 현재 단가 기준 원료별 원료비입니다. ◆는 단가 변동 가정을 적용한 원료비, 세로 막대(|)는 판매가입니다.")
     with st.expander("제품별 원료 구성 자세히"):
-        d = comp.assign(**{"투입량(제품 1kg당)": comp["투입량_kg"].map(lambda v: f"{v:.2f}kg"), "단가 ": comp["단가"].map(won),
+        d = comp.assign(**{"투입량(제품 1kg당)": comp["투입량_kg"].map(lambda v: f"{v:.2f}kg"), "단가 ": comp["단가"].map(won), "해동 감량": comp["해동감량률"].map(lambda v: f"{v:.1f}%" if v else "-"),
                            "가정 단가": comp["가정단가"].map(won), "원료비 ": comp["원료비"].map(won), "가정 원료비": comp["가정원료비"].map(won)})
-        st.dataframe(d[["제품", "원료", "투입량(제품 1kg당)", "단가 ", "가정 단가", "원료비 ", "가정 원료비", "근거"]], hide_index=True, use_container_width=True)
+        st.dataframe(d[["제품", "원료", "투입량(제품 1kg당)", "단가 ", "해동 감량", "가정 단가", "원료비 ", "가정 원료비", "근거"]], hide_index=True, use_container_width=True)
+        st.caption("냉동 원료는 해동 후 무게로 배합하므로, 원료비 = 투입량 × 단가 ÷ (1 − 해동 감량률)입니다. 가정 단가도 해동 후 기준입니다.")
 
     st.markdown("#### 4. 원료별 매입 금액")
     proj = C.project(data, today=C.today_kst(), settings=UC.get_settings())
-    amt = K.material_amounts(data, proj, "next", pct, DAYS)
+    amt = K.material_amounts(data, proj, "next", pct, DAYS, settings)
     at = pd.DataFrame({"원료": amt["원료"], "적용 단가": amt["적용단가"].map(won), "단가 근거": amt["근거"],
                        f"앞으로 {DAYS}일 소요": amt[f"{DAYS}일소요_kg"].map(ton), f"{DAYS}일 소요 금액": amt[f"{DAYS}일소요금액"].map(won_big),
                        "발주 검토량": amt["발주검토량_kg"].map(lambda v: ton(v) if v > 0 else "-"),
