@@ -74,11 +74,12 @@ def test_negative_quantity_is_error():
     assert C.clean_table("inventory", df, issues) is None
 
 
-def test_product_without_recipe_is_warned():
+def test_product_without_recipe_blocks_calculation():
     t = _tables()
     t["plan"] = pd.concat([t["plan"], pd.DataFrame([[t["plan"]["날짜"].iloc[0], "신제품", 50]], columns=t["plan"].columns)])
     d = C.load_data(t)
-    assert any("신제품" in i.message and i.level == "경고" for i in d.issues)
+    assert any("신제품" in i.message and i.level == "오류" for i in d.issues)
+    assert not d.ready()
 
 
 def test_required_file_missing_not_ready():

@@ -99,20 +99,23 @@ def instruction(row: pd.Series, m: Market, ref: pd.Timestamp) -> dict:
     order_by = row["발주기한"]
     when = "오늘" if (order_by is not None and not pd.isna(order_by) and pd.Timestamp(order_by) <= ref) else md(order_by)
 
+    if status == "확인필요":
+        return {"level": "확인필요", "headline": f"{name}: 데이터 갱신·계산 범위 확인 필요", "steps": ["현재 발주 권고는 중단했습니다. 재고 기준일과 계산 가정을 확인하세요."], "market": []}
+
     if status == "긴급":
         headline = f"{name}: {md(row['소진예정일'])}에 소진되는데 가장 빠른 입고는 {md(row['가장빠른입고일'])}입니다"
         gap = row["공백량_kg"]
-        steps.append(f"긴급 현물 구매: 입고 전 부족분 약 {ton(gap)}을 리드타임 없이 구할 수 있는 곳에서 확보하세요")
+        steps.append(f"긴급 현물 구매 검토: 입고 전 미충족 수요 약 {ton(gap)}. 실제 공급 가능일·품질 확인 후 대응안에서 비교하세요")
         if row["입고예정_kg"] > 0:
             steps.append(f"입고 앞당기기: 이미 잡힌 입고 예정 {ton(row['입고예정_kg'])}을 공급처에 앞당겨 달라고 요청하세요")
         if row["발주량_kg"] > 0:
-            steps.append(f"정규 발주도 같이: {when} {ton(row['발주량_kg'])} 발주 (리드타임 {lead}일)")
+            steps.append(f"정규 발주 참고: 추가 조치가 없을 때 {when} 약 {ton(row['발주량_kg'])} (리드타임 {lead}일). 긴급 확보량과 단순 합산하지 말고 선택한 대응 후 재계산하세요")
         if row["영향제품"]:
             steps.append(f"생산계획 조정: 이 원료를 쓰는 제품은 {row['영향제품']}입니다. 후순위 제품 감산·연기를 검토하세요 (하루 사용 {ton(row['일평균사용_kg'])})")
         level = "긴급"
     elif status == "발주필요":
-        headline = f"{name}: {when}까지 {ton(row['발주량_kg'])} 발주하세요"
-        steps.append(f"리드타임 {lead}일이라 {md(max(pd.Timestamp(order_by), ref) + pd.Timedelta(days=lead))}에 들어옵니다")
+        headline = f"{name}: {when}까지 약 {ton(row['발주량_kg'])} 발주 검토"
+        steps.append(f"리드타임 {lead}일을 가정한 입고일은 {md(max(pd.Timestamp(order_by), ref) + pd.Timedelta(days=lead))}입니다. 공급처 확인이 필요합니다")
         steps.append(f"현재 {ton(row['현재고_kg'])}({days(row['재고일수'])}), {md(row['안전재고이하일'])}에 안전재고({row['안전재고일수']:.0f}일치) 아래로 내려갑니다")
         if row["안전재고미달일수"] > 0:
             steps.append(f"주의: 입고 전 {int(row['안전재고미달일수'])}일 동안({md(row['안전재고이하일'])}부터) 안전재고보다 적게 운영합니다. 앞당길 수 있으면 요청하세요")
@@ -134,9 +137,9 @@ def instruction(row: pd.Series, m: Market, ref: pd.Timestamp) -> dict:
 
 
 def company_actions(proj: C.Projection, m: Market, ref: pd.Timestamp | None = None) -> list[dict]:
-    ref = ref or proj.base_date
+    ref = ref or proj.reference_date or proj.base_date
     out = [dict(instruction(r, m, ref), ingredient=r["원료"]) for _, r in proj.summary.iterrows()]
-    order = {"긴급": 0, "발주": 1, "과잉": 2, "정상": 3}
+    order = {"확인필요": -1, "긴급": 0, "발주": 1, "과잉": 2, "정상": 3}
     return sorted(out, key=lambda a: order[a["level"]])
 
 

@@ -9,11 +9,12 @@ CSV 4종 (한글 헤더, 단위 kg)
 계산 가정 (화면에도 표시한다)
   - 재고는 '기준일 마감' 값이다. 소요량은 기준일 다음 날부터 센다.
   - 생산계획이 끝난 뒤 날짜는 계획 기간의 하루 평균으로 이어 간다.
-  - 원료의 구분 단위는 (육종, 부위, 원산지)이다. 보관(냉장/냉동)은 기본 안전재고·리드타임을 고르는 데 쓴다.
+  - 원료는 (육종, 부위, 원산지, 보관)으로 구분하며 로트의 사용 가능 조건을 확인한다.
 """
 from __future__ import annotations
 
 import io
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -72,7 +73,12 @@ REQUIRED = {
     "plan": ["날짜", "제품", "계획물량_kg"],
     "recipe": ["제품", "육종", "부위", "원산지", "투입량_kg"],
 }
-OPTIONAL = {"inventory": ["안전재고일수", "리드타임일수", "발주주기일"], "inbound": ["발주일", "공급처"], "plan": [], "recipe": []}
+OPTIONAL = {
+    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한"],
+    "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한"],
+    "plan": ["주문번호", "납기", "우선순위"], "recipe": ["보관"],
+}
+MATERIAL_KEY = ["육종", "부위", "원산지", "보관"]
 NEEDED_FOR_CALC = ("inventory", "plan", "recipe")  # 입고 예정은 없어도 계산한다
 
 
@@ -163,7 +169,8 @@ def clean_table(kind: str, raw: pd.DataFrame, issues: list[Issue]) -> pd.DataFra
             issues.append(Issue("오류", label, f"원산지는 국산/수입 중 하나여야 합니다: {', '.join(bad)}"))
             return None
     if "보관" in df:
-        bad = sorted(set(df["보관"]) - {"냉장", "냉동"})
+        df["보관"] = df["보관"].replace({"nan": "", "None": "", "<NA>": ""}).fillna("")
+        bad = sorted(set(df["보관"]) - ({"냉장", "냉동", ""} if kind != "inventory" else {"냉장", "냉동"}))
         if bad:
             issues.append(Issue("오류", label, f"보관은 냉장/냉동 중 하나여야 합니다: {', '.join(bad)}"))
             return None
@@ -171,18 +178,59 @@ def clean_table(kind: str, raw: pd.DataFrame, issues: list[Issue]) -> pd.DataFra
     for c in [c for c in df.columns if c.endswith("_kg")] + [c for c in ("안전재고일수", "리드타임일수", "발주주기일") if c in df.columns]:
         df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "", regex=False), errors="coerce")
     for c in [c for c in df.columns if c.endswith("_kg")]:
-        if df[c].isna().any():
+        if df[c].isna().any() or not np.isfinite(df[c]).all():
             issues.append(Issue("오류", label, f"'{c}'에 숫자가 아닌 값이 있습니다 ({int(df[c].isna().sum())}행)"))
             return None
         if (df[c] < 0).any():
             issues.append(Issue("오류", label, f"'{c}'에 음수가 있습니다"))
             return None
-    for c in [c for c in ("기준일", "입고예정일", "날짜", "발주일") if c in df.columns]:
+    for c in ("안전재고일수", "리드타임일수", "발주주기일", "우선순위"):
+        if c not in df:
+            continue
+        raw_values = raw.rename(columns={x: canon.get(_norm(x), x) for x in raw.columns})[c].reindex(df.index)
+        present = raw_values.notna() & raw_values.astype(str).str.strip().ne("")
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+        minimum = 1 if c in ("발주주기일", "우선순위") else 0
+        maximum = {"안전재고일수": 90, "리드타임일수": 120, "발주주기일": 60, "우선순위": 1000000}[c]
+        if (present & (df[c].isna() | ~np.isfinite(df[c]) | (df[c] < minimum) | (df[c] > maximum) | (df[c] % 1 != 0))).any():
+            issues.append(Issue("오류", label, f"{c}는 {minimum}~{maximum} 범위의 정수여야 합니다"))
+            return None
+    for c in [c for c in ("기준일", "입고예정일", "날짜", "발주일", "납기", "사용가능일", "사용기한") if c in df.columns]:
+        present = df[c].notna() & ~df[c].astype(str).isin(["", "nan", "None", "NaT", "<NA>"])
         parsed = pd.to_datetime(df[c], errors="coerce")
-        if c != "발주일" and parsed.isna().any():
+        if (parsed.isna() & (present if c in ("발주일", "납기", "사용가능일", "사용기한") else True)).any():
             issues.append(Issue("오류", label, f"'{c}'의 날짜 형식이 올바르지 않습니다 (예: 2026-10-14)"))
             return None
         df[c] = parsed.dt.normalize()
+    if kind in ("inventory", "inbound"):
+        if "사용상태" not in df:
+            df["사용상태"] = "사용가능"
+            issues.append(Issue("참고", label, "기존 양식: 사용상태 미입력은 사용가능으로 가정합니다. QC·QA 확인 상태를 입력하세요."))
+        if not df["사용상태"].isin(["사용가능", "검사대기", "사용보류"]).all():
+            issues.append(Issue("오류", label, "사용상태는 사용가능/검사대기/사용보류 중 하나여야 합니다"))
+            return None
+        for c in ("사용가능일", "사용기한"):
+            if c not in df:
+                df[c] = pd.NaT
+        if (df["사용기한"].notna() & df["사용가능일"].notna() & (df["사용가능일"] > df["사용기한"])).any():
+            issues.append(Issue("오류", label, "사용가능일이 사용기한보다 늦습니다"))
+            return None
+        if df["사용기한"].isna().any():
+            issues.append(Issue("참고", label, "사용기한 미입력 로트는 기한 제한 없이 계산합니다. 실제 사용 가능 여부를 보증하지 않습니다."))
+    if kind == "plan":
+        if "우선순위" not in df:
+            df["우선순위"] = 100
+        df["우선순위"] = df["우선순위"].fillna(100)
+        if "납기" not in df:
+            df["납기"] = pd.NaT
+        if "주문번호" not in df:
+            df["주문번호"] = "미지정"
+        if df["제품"].isna().any() or df["제품"].isin(["", "nan", "None"]).any():
+            issues.append(Issue("오류", label, "제품명이 비어 있습니다"))
+            return None
+    if kind == "recipe" and (df["투입량_kg"] <= 0).any():
+        issues.append(Issue("오류", label, "배합표 투입량은 0보다 커야 합니다"))
+        return None
     return df.reset_index(drop=True)
 
 
@@ -195,8 +243,32 @@ def load_data(raw_tables: dict[str, pd.DataFrame | None]) -> CompanyData:
                 data.issues.append(Issue("오류", FILE_LABELS[kind], "파일이 없습니다"))
             continue
         setattr(data, kind, clean_table(kind, raw, data.issues))
+    _resolve_storage(data)
     _cross_check(data)
     return data
+
+
+def _resolve_storage(data: CompanyData) -> None:
+    """옛 양식은 보관 후보가 하나일 때만 연결한다. 모호하면 계산을 막는다."""
+    keys = MATERIAL_KEY[:3]
+    for kind in ("recipe", "inbound"):
+        df = getattr(data, kind)
+        if df is None:
+            continue
+        if "보관" not in df:
+            df["보관"] = ""
+        for i, row in df.iterrows():
+            if row["보관"] in ("냉장", "냉동"):
+                continue
+            candidates = set()
+            for other in (data.inventory, data.recipe, data.inbound):
+                if other is not None and "보관" in other:
+                    mask = (other[keys] == row[keys]).all(axis=1)
+                    candidates |= set(other.loc[mask, "보관"]) & {"냉장", "냉동"}
+            if len(candidates) == 1:
+                df.at[i, "보관"] = candidates.pop()
+            else:
+                data.issues.append(Issue("오류", FILE_LABELS[kind], f"{row['육종']} {row['부위']}({row['원산지']})의 보관을 명시하세요. 냉장·냉동을 임의 합산하지 않습니다."))
 
 
 def _cross_check(d: CompanyData) -> None:
@@ -204,14 +276,16 @@ def _cross_check(d: CompanyData) -> None:
         return
     no_recipe = sorted(set(d.plan["제품"]) - set(d.recipe["제품"]))
     if no_recipe:
-        d.issues.append(Issue("경고", "생산계획", "배합표에 없는 제품은 원료 소요량에서 빠집니다: " + ", ".join(no_recipe)))
+        d.issues.append(Issue("오류", "생산계획", "계산 불완전: 배합표가 없는 제품입니다. 발주 권고를 중단합니다: " + ", ".join(no_recipe)))
     unused = sorted(set(d.recipe["제품"]) - set(d.plan["제품"]))
     if unused:
         d.issues.append(Issue("참고", "배합표", "생산계획에 없는 제품(소요량 0): " + ", ".join(unused)))
     if d.inventory is not None:
-        inv_keys = set(zip(d.inventory["육종"], d.inventory["부위"], d.inventory["원산지"]))
-        need = set(zip(d.recipe["육종"], d.recipe["부위"], d.recipe["원산지"]))
-        no_stock = sorted(f"{s} {p}({o})" for s, p, o in need - inv_keys)
+        if d.inventory["기준일"].nunique() > 1:
+            d.issues.append(Issue("오류", "재고", "모든 재고를 같은 기준일 마감으로 맞춰 주세요. 서로 다른 날짜의 재고는 합산하지 않습니다."))
+        inv_keys = set(d.inventory[MATERIAL_KEY].itertuples(index=False, name=None))
+        need = set(d.recipe[MATERIAL_KEY].itertuples(index=False, name=None))
+        no_stock = sorted(ingredient_label(*key) for key in need - inv_keys)
         if no_stock:
             d.issues.append(Issue("경고", "재고", "배합표에 쓰이지만 재고가 없는 원료(재고 0으로 계산): " + ", ".join(no_stock)))
         dup = d.inventory.duplicated(["기준일", "육종", "부위", "원산지", "보관"], keep=False)
@@ -228,6 +302,8 @@ class Projection:
     summary: pd.DataFrame      # 원료별 한 줄
     daily: pd.DataFrame        # 원료 x 날짜 예상 재고
     notes: list[str]
+    actionable: bool = True
+    reference_date: pd.Timestamp | None = None
 
 
 @dataclass
@@ -238,6 +314,45 @@ class Settings:
     cycle: dict = field(default_factory=lambda: dict(DEFAULT_CYCLE))
 
 
+def today_kst() -> pd.Timestamp:
+    return pd.Timestamp.now(tz="Asia/Seoul").tz_localize(None).normalize()
+
+
+def freshness(data: CompanyData, today: pd.Timestamp) -> str:
+    base = data.inventory["기준일"].max()
+    age = (pd.Timestamp(today).normalize() - base).days
+    if age < 0:
+        return "재고 기준일이 미래입니다. 현재 발주 판단을 중단합니다."
+    if age > 1:
+        return f"재고 기준일이 {age}일 전입니다. 최신 마감 재고·실제 입고·생산계획으로 갱신하기 전에는 발주 권고를 하지 않습니다."
+    return ""
+
+
+def load_settings() -> Settings:
+    path = COMPANY_DIR / "settings.json"
+    if not path.exists():
+        return Settings()
+    value = json.loads(path.read_text(encoding="utf-8"))
+    result = Settings(safety={tuple(k.split("/")): v for k, v in value["safety"].items()}, lead=value["lead"], cycle=value["cycle"])
+    _validate_settings(result)
+    return result
+
+
+def _validate_settings(settings: Settings) -> None:
+    for values, defaults, low, high in ((settings.safety, DEFAULT_SAFETY, 0, 90), (settings.lead, DEFAULT_LEAD, 0, 120), (settings.cycle, DEFAULT_CYCLE, 1, 60)):
+        if set(values) != set(defaults) or any(not isinstance(v, (int, float)) or not math.isfinite(v) or v != int(v) or not low <= v <= high for v in values.values()):
+            raise ValueError("저장된 기본값이 올바르지 않습니다. 설정 파일을 확인하세요.")
+
+
+def save_settings(settings: Settings) -> None:
+    _validate_settings(settings)
+    COMPANY_DIR.mkdir(parents=True, exist_ok=True)
+    target = COMPANY_DIR / "settings.json"
+    temp = target.with_suffix(".tmp")
+    temp.write_text(json.dumps({"safety": {"/".join(k): v for k, v in settings.safety.items()}, "lead": settings.lead, "cycle": settings.cycle}, ensure_ascii=False), encoding="utf-8")
+    temp.replace(target)
+
+
 def _share_text(d: dict) -> str:
     tot = sum(d.values())
     if tot <= 0:
@@ -245,8 +360,8 @@ def _share_text(d: dict) -> str:
     return " · ".join(f"{p} {v / tot * 100:.0f}%" for p, v in sorted(d.items(), key=lambda x: -x[1]))
 
 
-def ingredient_label(species: str, part: str, origin: str) -> str:
-    return f"{species} {part}({origin})"
+def ingredient_label(species: str, part: str, origin: str, storage: str = "") -> str:
+    return f"{species} {part}({origin})" + (f" · {storage}" if storage else "")
 
 
 def _plan_daily(plan: pd.DataFrame, base: pd.Timestamp, dates: pd.DatetimeIndex, notes: list[str]) -> pd.DataFrame:
@@ -269,9 +384,45 @@ def _plan_daily(plan: pd.DataFrame, base: pd.Timestamp, dates: pd.DatetimeIndex,
     return out.fillna(0.0)
 
 
+def material_lots(data: CompanyData) -> list[dict]:
+    """입고·검사 상태·해동 준비일·사용기한을 반영한 로트. 품질 판정은 입력값만 사용한다."""
+    base = data.inventory["기준일"].max()
+    lots = []
+    for kind, df, qty in (("inventory", data.inventory, "재고량_kg"), ("inbound", data.inbound, "입고량_kg")):
+        if df is None:
+            continue
+        for i, r in df.iterrows():
+            arrival = base + pd.Timedelta(days=1) if kind == "inventory" else r["입고예정일"]
+            if kind == "inbound" and arrival <= base:
+                continue
+            ready = max(arrival, r["사용가능일"]) if pd.notna(r["사용가능일"]) else arrival
+            lots.append({"key": tuple(r[c] for c in MATERIAL_KEY), "id": str(r.get("로트", f"{kind}-{i}")),
+                         "qty": float(r[qty]), "ready": ready, "arrival": arrival,
+                         "expires": r["사용기한"], "status": r["사용상태"], "kind": kind})
+    return lots
+
+
+def available_lots(lots: list[dict], key: tuple, day: pd.Timestamp) -> list[dict]:
+    return sorted((lot for lot in lots if lot["key"] == key and lot["status"] == "사용가능" and lot["ready"] <= day
+                   and (pd.isna(lot["expires"]) or day <= lot["expires"])),
+                  key=lambda lot: (lot["expires"] if pd.notna(lot["expires"]) else pd.Timestamp.max, lot["ready"], lot["id"]))
+
+
+def take(lots: list[dict], key: tuple, day: pd.Timestamp, quantity: float) -> float:
+    remaining = max(quantity, 0.0)
+    for lot in available_lots(lots, key, day):
+        used = min(lot["qty"], remaining)
+        lot["qty"] -= used
+        remaining -= used
+    return remaining
+
+
 def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp | None = None,
             settings: Settings | None = None) -> Projection:
+    if not data.ready():
+        raise ValueError("계산 불완전: 입력 오류를 먼저 수정해 주세요.")
     st_ = settings or Settings()
+    _validate_settings(st_)
     inv, inb, plan, rec = data.inventory, data.inbound, data.plan, data.recipe
     notes: list[str] = []
     base = inv["기준일"].max()
@@ -279,20 +430,20 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
     dates = pd.date_range(base + timedelta(days=1), periods=horizon)
 
     pd_daily = _plan_daily(plan, base, dates, notes)
-    key = ["육종", "부위", "원산지"]
+    key = MATERIAL_KEY
     r = rec.groupby(["제품"] + key)["투입량_kg"].sum().reset_index()
     demand, prod_dem = {}, {}
     for _, row in r.iterrows():
         if row["제품"] not in pd_daily.columns:
             continue
-        k = (row["육종"], row["부위"], row["원산지"])
+        k = tuple(row[c] for c in key)
         demand.setdefault(k, pd.Series(0.0, index=dates))
         demand[k] = demand[k] + pd_daily[row["제품"]] * row["투입량_kg"]
         prod_dem.setdefault(k, {})[row["제품"]] = prod_dem.get(k, {}).get(row["제품"], 0.0) + float((pd_daily[row["제품"]].iloc[:14] * row["투입량_kg"]).sum())
 
-    keys = set(demand) | set(zip(inv["육종"], inv["부위"], inv["원산지"]))
+    keys = set(demand) | set(inv[key].itertuples(index=False, name=None))
     if inb is not None and len(inb):
-        keys |= set(zip(inb["육종"], inb["부위"], inb["원산지"]))
+        keys |= set(inb[key].itertuples(index=False, name=None))
 
     inbound_by = {}
     if inb is not None and len(inb):
@@ -304,18 +455,21 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
             inbound_by[k] = g.groupby("입고예정일")["입고량_kg"].sum().reindex(dates, fill_value=0.0)
 
     rows, daily_parts = [], []
+    all_lots = material_lots(data)
+    stale = freshness(data, today) if today is not None else ""
+    if stale:
+        notes.append(stale)
     for k in sorted(keys):
-        species, part, origin = k
-        g_inv = inv[(inv["육종"] == species) & (inv["부위"] == part) & (inv["원산지"] == origin)]
+        species, part, origin, storage = k
+        g_inv = inv[(inv[key] == pd.Series(k, index=key)).all(axis=1)]
         if len(g_inv):
             last_day = g_inv["기준일"].max()
             cur = g_inv[g_inv["기준일"] == last_day]
             s0 = float(cur["재고량_kg"].sum())
-            storage = cur["보관"].iloc[0]
             if last_day < base:
                 notes.append(f"{ingredient_label(*k)} 재고 기준일이 {(base - last_day).days}일 전({last_day:%m/%d})입니다")
         else:
-            s0, storage = 0.0, ("냉동" if origin == "수입" else "냉장")
+            s0 = 0.0
         def _col(name, default):
             return float(g_inv[name].max()) if len(g_inv) and name in g_inv and g_inv[name].notna().any() else float(default)
         safety_days = _col("안전재고일수", st_.safety[(origin, storage)])
@@ -323,18 +477,24 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
         cycle_days = _col("발주주기일", st_.cycle[origin])
         dem = demand.get(k, pd.Series(0.0, index=dates))
         inc = inbound_by.get(k, pd.Series(0.0, index=dates))
-        stock = s0 + (inc - dem).cumsum()
+        lots = [dict(lot) for lot in all_lots if lot["key"] == k]
+        usable0 = sum(lot["qty"] for lot in available_lots(lots, k, dates[0]) if lot["kind"] == "inventory")
+        missing, balances = 0.0, []
+        for day in dates:
+            missing += take(lots, k, day, float(dem.loc[day]))
+            balances.append(sum(lot["qty"] for lot in available_lots(lots, k, day)) - missing)
+        stock = pd.Series(balances, index=dates)
         avg7 = float(dem.iloc[:7].mean())
         safety_qty = safety_days * avg7
 
         cum_dem = dem.cumsum()
-        run_no_inbound = cum_dem[cum_dem > s0]
+        run_no_inbound = cum_dem[cum_dem > usable0]
         if avg7 <= 0:
             cover_days = math.inf
         elif len(run_no_inbound):
-            i = int((cum_dem > s0).values.argmax())
+            i = int((cum_dem > usable0).values.argmax())
             prev = float(cum_dem.iloc[i - 1]) if i > 0 else 0.0
-            cover_days = i + (s0 - prev) / max(float(dem.iloc[i]), 1e-9)
+            cover_days = i + (usable0 - prev) / max(float(dem.iloc[i]), 1e-9)
         else:
             cover_days = math.inf
         neg = stock[stock < 0]
@@ -365,22 +525,25 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
             over_days = max(safety_days * 4, 20)
             if (s0 + float(inc.sum())) / avg7 > over_days:
                 status = "과잉"
+        if breach is not None and max(breach, arrival) > dates[-1]:
+            status, order_qty = "확인필요", 0.0
+            notes.append(f"{ingredient_label(*k)}의 예상 입고가 {horizon}일 계산 범위를 벗어나 발주량 권고를 중단했습니다")
 
         rows.append({
             "육종": species, "부위": part, "원산지": origin, "보관": storage, "원료": ingredient_label(*k),
-            "현재고_kg": s0, "일평균사용_kg": avg7, "재고일수": cover_days, "안전재고일수": safety_days,
-            "리드타임일수": lead_days, "소진예정일": runout, "안전재고이하일": breach, "상태": status,
+            "현재고_kg": s0, "초기사용가능_kg": usable0, "일평균사용_kg": avg7, "재고일수": cover_days, "안전재고일수": safety_days,
+            "리드타임일수": lead_days, "소진예정일": runout, "안전재고이하일": breach, "상태": "확인필요" if stale else status,
             "발주기한": order_by, "발주량_kg": order_qty, "공백량_kg": gap, "가장빠른입고일": arrival, "안전재고미달일수": under_days, "안전재고미달종료일": under_end, "발주주기일": cycle_days, "영향제품": _share_text(prod_dem.get(k, {})), "입고예정_kg": float(inc.sum()),
         })
         daily_parts.append(pd.DataFrame({"원료": ingredient_label(*k), "날짜": dates, "예상재고_kg": stock.values,
                                           "소요량_kg": dem.values, "입고_kg": inc.values, "안전재고_kg": safety_qty}))
 
     summary = pd.DataFrame(rows)
-    order = {"긴급": 0, "발주필요": 1, "과잉": 2, "정상": 3}
+    order = {"확인필요": -1, "긴급": 0, "발주필요": 1, "과잉": 2, "정상": 3}
     if len(summary):
         summary = summary.sort_values(["상태", "재고일수"], key=lambda s: s.map(order) if s.name == "상태" else s).reset_index(drop=True)
     daily = pd.concat(daily_parts, ignore_index=True) if daily_parts else pd.DataFrame()
-    return Projection(base_date=base, summary=summary, daily=daily, notes=notes)
+    return Projection(base_date=base, summary=summary, daily=daily, notes=notes, actionable=not stale, reference_date=ref)
 
 
 # ------------------------------------------------------------------ 저장 / 불러오기 / 양식
@@ -409,7 +572,7 @@ def clear_saved() -> int:
 
 def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
     """설명용 가짜 데이터. 날짜는 '오늘' 기준으로 만든다 (실제 회사 데이터가 아님)."""
-    t = pd.Timestamp(today or date.today()).normalize()
+    t = pd.Timestamp(today if today is not None else today_kst()).normalize()
     d = lambda n: (t + timedelta(days=n)).strftime("%Y-%m-%d")  # noqa: E731
     inventory = pd.DataFrame([
         [d(0), "돼지", "앞다리", "국산", "냉장", 9000, None, None],
@@ -433,6 +596,17 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
         ["육개장", "소", "양지", "수입", 0.30], ["육개장", "소", "사태", "국산", 0.10],
         ["양념갈비", "돼지", "갈비", "국산", 0.90],
     ], columns=["제품", "육종", "부위", "원산지", "투입량_kg"])
+    storage_map = {(r['육종'], r['부위'], r['원산지']): r['보관'] for _, r in inventory.iterrows()}
+    for frame in (inbound, recipe):
+        frame["보관"] = [storage_map[tuple(r[c] for c in MATERIAL_KEY[:3])] for _, r in frame.iterrows()]
+    for kind, frame in (("ST", inventory), ("IN", inbound)):
+        frame["로트"] = [f"{kind}-{i+1:03d}" for i in range(len(frame))]
+        frame["사용상태"] = "사용가능"
+        frame["사용가능일"] = d(1) if kind == "ST" else frame["입고예정일"]
+        frame["사용기한"] = d(60)
+    plan["주문번호"] = [f"DEMO-{i+1:03d}" for i in range(len(plan))]
+    plan["납기"] = plan["날짜"]
+    plan["우선순위"] = 100
     return {"inventory": inventory, "inbound": inbound, "plan": plan, "recipe": recipe}
 
 

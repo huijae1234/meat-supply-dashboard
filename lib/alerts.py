@@ -89,14 +89,20 @@ def find_alerts(cfg: dict) -> list[dict]:
         if any(v is not None for v in saved.values()):
             data = CO.load_data(saved)
             if data.ready():
-                proj = CO.project(data)
+                proj = CO.project(data, today=CO.today_kst(), settings=CO.load_settings())
+                if not proj.actionable:
+                    out.append({"rule": "company", "level": "주의", "key": f"company-stale:{proj.base_date:%Y-%m-%d}",
+                                "message": "우리 공장 · 재고 데이터 갱신 필요. 발주 권고를 중단했습니다."})
                 for _, r in proj.summary.iterrows():
                     if r["상태"] in ("긴급", "발주필요"):
                         deadline = r["발주기한"] if r["발주기한"] is not None and not pd.isna(r["발주기한"]) else r["소진예정일"]
-                        ins = ADV.instruction(r, ADV.Market(), proj.base_date)
+                        ins = ADV.instruction(r, ADV.Market(), proj.reference_date)
                         out.append({"rule": "company", "level": "경고" if r["상태"] == "긴급" else "주의",
                                     "key": f"company:{r['원료']}:{r['상태']}:{pd.Timestamp(deadline):%Y-%m-%d}",
                                     "message": "우리 공장 · " + ins["headline"]})
+            else:
+                out.append({"rule": "company", "level": "주의", "key": "company-invalid-input",
+                            "message": "우리 공장 · 입력 오류로 계산을 중단했습니다. 데이터 점검 항목을 확인하세요."})
     except Exception as e:  # 자사 파일 문제로 시장 알림까지 막지 않는다
         out.append({"rule": "collect", "level": "주의", "key": f"company-error:{type(e).__name__}:{str(e)[:40]}",
                     "message": f"우리 공장 파일을 계산하지 못했습니다: {e}"})

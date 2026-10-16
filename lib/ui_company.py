@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import hashlib
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -56,14 +57,12 @@ def render_lock(where: str = "") -> bool:
 
 # ------------------------------------------------------------------ 자사 데이터 상태 공유
 def get_settings() -> C.Settings:
-    """화면에서 고친 기본값(없으면 코드 기본값)."""
-    s = C.Settings()
-    for (o, sto) in list(s.safety):
-        s.safety[(o, sto)] = st.session_state.get(f"set_safety_{o}_{sto}", s.safety[(o, sto)])
-    for o in list(s.lead):
-        s.lead[o] = st.session_state.get(f"set_lead_{o}", s.lead[o])
-        s.cycle[o] = st.session_state.get(f"set_cycle_{o}", s.cycle[o])
-    return s
+    """화면과 자동 알림은 동일한 저장 설정만 사용한다."""
+    try:
+        return C.load_settings()
+    except (ValueError, KeyError, OSError) as exc:
+        st.error(f"설정을 읽을 수 없어 계산을 중단했습니다: {exc}")
+        st.stop()
 
 
 def current_company() -> tuple[C.CompanyData | None, str]:
@@ -84,10 +83,20 @@ def _company_block(m: A.Market) -> bool:
         return False
     data, label = current_company()
     if data is None or not data.ready():
+        if data is not None:
+            st.error("계산 불완전: 공장 입력 오류를 수정하기 전에는 생산·발주 판단을 표시하지 않습니다.")
+            for issue in data.issues:
+                if issue.level == "오류":
+                    st.write(issue.message)
         st.info("**우리 공장** 화면에 재고·입고 예정·생산계획·배합표 CSV를 올리면, 여기에 원료별 소진 예정일과 "
-                "**발주 지시**(날짜·톤)가 나옵니다. 지금은 시장 신호만 보여드립니다.")
+                "**발주 검토안**(날짜·톤)이 나옵니다.")
         return False
-    proj = C.project(data, settings=get_settings())
+    proj = C.project(data, today=C.today_kst(), settings=get_settings())
+    if not proj.actionable:
+        st.warning(C.freshness(data, C.today_kst()))
+        return True
+    from lib.ui_planning import show_impact
+    show_impact(data, compact=True)
     acts = A.company_actions(proj, m)
     counts = pd.Series([a["level"] for a in acts]).value_counts()
     st.caption(f"{label} · 재고 기준일 {md(proj.base_date)}")
@@ -134,23 +143,25 @@ def _price_block(m: A.Market) -> None:
 
 
 def render_today(k: float) -> None:
-    m = market_cached(live_sig(), k)
-    st.subheader("오늘의 현황")
+    try:
+        m = market_cached(live_sig(), k)
+    except Exception:
+        m = A.Market()
+        st.warning("시장 참고 데이터를 읽지 못했습니다. 공장 계산은 계속 사용할 수 있습니다.")
+    st.subheader("오늘의 생산 위험")
+    st.caption("원료 기준의 계획 검토입니다. 설비·인력·포장재·완제품 재고·출하 승인·운송 시간은 포함하지 않습니다.")
+    if unlocked() and st.button("샘플로 생산 차질 확인", key="today_sample"):
+        st.session_state["co_source"] = "sample"
+        st.rerun()
+    _company_block(m)
     if not m.available:
-        st.info("실제 시장 데이터가 아직 없습니다. 터미널에서 `python collect.py` 를 실행하면 수집됩니다.")
+        st.info("시장 참고 데이터가 없습니다. 공장 CSV·샘플 계산은 독립적으로 사용할 수 있습니다.")
         return
     st.caption(f"시장 재고는 **{m.stock_month:%Y-%m}** 집계가 마지막입니다(월 단위, 2~3개월 늦게 나옵니다). "
-               f"소비자가는 **{m.price_date:%m/%d}** 까지 들어와 있습니다. 시장 숫자는 전국 기준이며 우리 공장 수치가 아닙니다.")
-    # 자사 데이터가 있으면 '우리 공장 할 일'을 맨 위에, 시장 신호는 그 아래 참고로 둔다
-    data, _ = current_company()
-    own_first = data is not None and data.ready() and unlocked()
-    if own_first:
-        _company_block(m)
+               f"소비자가 기준일은 **{md(m.price_date)}** 입니다. 시장 숫자는 전국 기준이며 우리 공장 수치가 아닙니다.")
+    with st.expander("시장 참고 신호·시세"):
         _market_block(m, own_first=True)
-    else:
-        _market_block(m, own_first=False)
-        _company_block(m)
-    _price_block(m)
+        _price_block(m)
 
 
 def _action_card(a: dict) -> None:
@@ -187,7 +198,8 @@ def render_company(k: float, layout) -> None:
     if top[1].button("올려 둔 파일 사용", use_container_width=True):
         st.session_state["co_source"] = "saved"
         st.rerun()
-    if top[2].button("저장된 파일 지우기", use_container_width=True):
+    confirm_clear = st.checkbox("저장한 원본 CSV 4종 삭제에 동의합니다 (설정·조치 이력은 유지)")
+    if top[2].button("저장된 파일 지우기", use_container_width=True, disabled=not confirm_clear):
         n = C.clear_saved()
         st.session_state["co_source"] = "saved"
         for kind in C.FILES:
@@ -204,7 +216,7 @@ def render_company(k: float, layout) -> None:
             st.caption("열: " + ", ".join(C.REQUIRED[kind]) + (" · 선택: " + ", ".join(C.OPTIONAL[kind]) if C.OPTIONAL[kind] else ""))
             f = st.file_uploader(C.FILE_LABELS[kind], type="csv", key=f"up_{kind}", label_visibility="collapsed")
             if f is not None:
-                fid = f"{f.name}:{f.size}"
+                fid = hashlib.sha256(f.getvalue()).hexdigest()
                 if st.session_state.get(f"saved_{kind}") != fid:
                     iss: list[C.Issue] = []
                     try:
@@ -230,16 +242,22 @@ def render_company(k: float, layout) -> None:
         st.caption("원산지는 국산/수입, 보관은 냉장/냉동으로 적습니다. '앞다리'는 시장 데이터의 '전지', '뒷다리'는 '후지', '목살'은 '목심'과 연결됩니다.")
 
     with st.expander("기본값 조정 (CSV에 안전재고일수·리드타임일수·발주주기일을 안 적은 원료에 적용)"):
+        saved_settings = get_settings()
+        draft_settings = C.Settings()
         a, b, c = st.columns(3)
         a.markdown("**안전재고 (일치)**")
         for (o, sto), v in C.DEFAULT_SAFETY.items():
-            a.number_input(f"{o} {sto}", 0, 90, v, key=f"set_safety_{o}_{sto}")
+            draft_settings.safety[(o, sto)] = a.number_input(f"{o} {sto}", 0, 90, int(saved_settings.safety[(o, sto)]), key=f"set_safety_{o}_{sto}")
         b.markdown("**리드타임 (발주→입고 일)**")
         for o, v in C.DEFAULT_LEAD.items():
-            b.number_input(o, 0, 120, v, key=f"set_lead_{o}")
+            draft_settings.lead[o] = b.number_input(o, 0, 120, int(saved_settings.lead[o]), key=f"set_lead_{o}")
         c.markdown("**발주 주기 (일)**")
         for o, v in C.DEFAULT_CYCLE.items():
-            c.number_input(o, 1, 60, v, key=f"set_cycle_{o}")
+            draft_settings.cycle[o] = c.number_input(o, 1, 60, int(saved_settings.cycle[o]), key=f"set_cycle_{o}")
+        if st.button("기본값 저장 · 화면과 자동 알림에 함께 적용"):
+            C.save_settings(draft_settings)
+            st.success("저장했습니다. 화면 계산과 다음 자동 알림이 같은 설정을 사용합니다.")
+        st.caption("저장 전 편집 값은 계산에 적용하지 않습니다. CSV에 적힌 원료별 값이 저장 기본값보다 우선합니다.")
         st.caption("발주량 = (안전재고 + 발주 주기 동안 쓸 양) − 입고 시점의 예상 재고. 100kg 단위로 올립니다.")
 
     data, label = current_company()
@@ -255,21 +273,26 @@ def render_company(k: float, layout) -> None:
         st.error("필수 파일(재고, 생산계획, 배합표)이 모두 올바르게 올라와야 계산합니다. 위 점검 내용을 확인하세요.")
         return
 
-    m = market_cached(live_sig(), k)
-    proj = C.project(data, settings=get_settings())
+    try:
+        m = market_cached(live_sig(), k)
+    except Exception:
+        m = A.Market()
+    proj = C.project(data, today=C.today_kst(), settings=get_settings())
     s = proj.summary
     st.caption(f"{label} · 재고 기준일 {md(proj.base_date)} · 앞으로 {C.HORIZON_DAYS}일 계산")
+    if not proj.actionable:
+        st.warning(C.freshness(data, C.today_kst()) + " 아래는 과거 기준 참고 계산입니다.")
 
     table = pd.DataFrame({
         "상태": s["상태"], "원료": s["원료"], "보관": s["보관"],
-        "현재고": s["현재고_kg"].map(ton), "하루 사용": s["일평균사용_kg"].map(ton),
+        "보유재고": s["현재고_kg"].map(ton), "첫날 사용가능 재고": s["초기사용가능_kg"].map(ton), "하루 사용": s["일평균사용_kg"].map(ton),
         "재고일수(입고 전)": s["재고일수"].map(days), "안전재고 아래": s["안전재고이하일"].map(md),
         "소진 예정": s["소진예정일"].map(md), "발주 기한": s["발주기한"].map(md),
-        "발주량": s["발주량_kg"].map(lambda v: ton(v) if v > 0 else "-"), "영향 제품": s["영향제품"],
+        "발주량(참고)": s["발주량_kg"].map(lambda v: ton(v) if v > 0 and proj.actionable else "권고 없음"), "원료 사용 비중(차질률 아님)": s["영향제품"],
     })
     st.dataframe(table, hide_index=True, use_container_width=True)
 
-    st.markdown("#### 3. 지시")
+    st.markdown("#### 3. 검토할 대응 · 자동 발주 아님")
     for a in A.company_actions(proj, m):
         _action_card(a)
 
@@ -295,3 +318,5 @@ def render_company(k: float, layout) -> None:
         st.write("· 소요량 = 생산계획 물량 × 배합표 투입량. 계획이 없는 날은 0, 계획이 끝난 뒤는 계획 기간의 하루 평균으로 이어 갑니다.")
         st.write("· 입고 예정은 입고예정일 당일에 재고에 더합니다. 기준일 이전 입고는 이미 재고에 들어간 것으로 봅니다.")
         st.write("· 시장 신호(재고·소비자가)는 전국 기준 참고 문구이며 계산에는 영향을 주지 않습니다.")
+        st.write("· 냉장·냉동은 분리합니다. 검사대기·사용보류는 제외하고, 사용가능일(해동 준비 포함) 이후·사용기한 이내 로트를 사용합니다. 기한 미입력은 제한 없이 계산합니다.")
+        st.write("· 이 그래프는 계획 수요를 모두 차감한 순수급 참고선입니다. 실제 가능한 생산과 잔량은 '생산 차질·대응안'에서 확인하세요.")

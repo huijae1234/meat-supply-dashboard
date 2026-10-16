@@ -83,7 +83,7 @@ _bad = bool(_ls and not _ls.get("ok", True))
 _collect = f"실제 수집 실패 {_ls.get('errors', 0)}건" if _bad else f"실제 데이터 수집 {live.last_refresh() or '없음'}"
 st.markdown(
     f'''<div class="hero"><div><h1>🥩🐷🐂 고기가 부족하게 돼지 않겠소?</h1>
-<p>축산물 수급 대시보드 · 돼지·소 재고·가격 경보 · 수입 위험 · 유통 병목</p></div>
+<p>식품 생산계획 연계 원료 수급·차질 대응 대시보드</p></div>
 <div><span class="meta">합성 데이터 실적 ~{LAST:%Y-%m-%d}</span><span class="meta">{theme.dot("critical" if _bad else "good")}{_collect}</span></div></div>''',
     unsafe_allow_html=True)
 
@@ -769,12 +769,16 @@ def page_live():
 
 
 # ------------------------------------------------------------------ 왼쪽 내비게이션
+from lib.ui_planning import render_planning, render_worklog
+
 _nav = st.navigation({
-    "오늘": [st.Page(page_today, title="오늘의 현황", url_path="today", default=True)],
-    "우리 공장": [st.Page(page_company, title="우리 공장", url_path="company")],
-    "실제 데이터": [st.Page(page_live, title="실제 데이터", url_path="live"),
+    "생산관리": [st.Page(page_today, title="오늘의 생산 위험", url_path="today", default=True),
+                 st.Page(page_company, title="원료 소요·재고", url_path="company"),
+                 st.Page(render_planning, title="생산 차질·대응안", url_path="planning"),
+                 st.Page(render_worklog, title="조치 이력", url_path="worklog")],
+    "시장 참고": [st.Page(page_live, title="실제 데이터", url_path="live"),
                  st.Page(page_analysis, title="실제 분석·예측", url_path="analysis")],
-    "시연 (합성 데이터)": [st.Page(page_syn_status, title="현황·경보", url_path="demo-status"),
+    "분석 과정 (합성·보조)": [st.Page(page_syn_status, title="현황·경보", url_path="demo-status"),
                       st.Page(page_syn_trend, title="수급 추이·예측", url_path="demo-trend"),
                       st.Page(page_syn_season, title="계절성·이상치", url_path="demo-season"),
                       st.Page(page_syn_event, title="명절·이벤트", url_path="demo-event"),
