@@ -1,10 +1,12 @@
 """생산관리 검토 화면: 원료 제약 → 계획 영향 → 대응안 비교 → 조치 이력."""
+import copy
 import json
+import math
 
 import pandas as pd
 import streamlit as st
 
-from lib import company as C, planning as P, worklog as W
+from lib import company as C, planning as P, response as R, worklog as W
 
 
 def show_impact(data, compact=False):
@@ -57,6 +59,78 @@ def _get_data():
     return data, label
 
 
+def _spot_settings(saved: C.Settings) -> None:
+    with st.expander(f"긴급 현물 가정 (할증 {saved.spot_premium:.0f}%, 도착 국산 {saved.spot_lead['국산']}일·수입 {saved.spot_lead['수입']}일)"):
+        draft = copy.deepcopy(saved)
+        a, b, c = st.columns(3)
+        draft.spot_premium = float(a.number_input("단가 할증 (%)", 0.0, 200.0, float(saved.spot_premium), 1.0, key="spot_premium"))
+        draft.spot_lead = {"국산": int(b.number_input("도착 일수 · 국산", 0, 30, int(saved.spot_lead["국산"]), key="spot_lead_dom")),
+                           "수입": int(c.number_input("도착 일수 · 수입", 0, 30, int(saved.spot_lead["수입"]), key="spot_lead_imp"))}
+        if st.button("긴급 현물 가정 저장", key="spot_save"):
+            try:
+                C.save_settings(draft)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("저장했습니다.")
+                st.rerun()
+        st.caption("판단일부터 도착 일수 뒤에 들어온다고 봅니다. 냉동은 해동 일정까지 더해 쓸 수 있는 날을 계산합니다.")
+
+
+def _won(v) -> str:
+    from lib.plain import won_big
+    return "-" if v is None or (isinstance(v, float) and math.isnan(v)) else won_big(v)
+
+
+def _auto_candidates(data, settings) -> dict:
+    """자동 대응 후보 표. {후보 이름: 후보 데이터}를 돌려준다(편집기 불러오기용)."""
+    st.markdown("#### 자동 대응 후보")
+    st.caption("부족을 보고 규칙으로 만든 후보입니다(최적화 아님). 대체 원료는 대체표에 허용된 것만, 긴급 현물은 아래 가정으로 만듭니다.")
+    _spot_settings(settings)
+    # 편집기를 고칠 때마다 화면이 다시 그려지므로, 같은 입력·설정·판단일이면 후보 계산을 다시 하지 않는다
+    key = (P.fingerprint(data), repr(sorted((k, repr(v)) for k, v in vars(settings).items())), str(C.today_kst().date()))
+    cached = st.session_state.get("auto_candidates")
+    if cached and cached[0] == key:
+        cands, table = cached[1], cached[2]
+    else:
+        try:
+            _, cands = R.candidates(data, settings, C.today_kst())
+        except ValueError as exc:
+            st.warning(str(exc))
+            return {}
+        table = R.compare(data, cands, settings) if len(cands) > 1 else None
+        st.session_state["auto_candidates"] = (key, cands, table)
+    if len(cands) == 1:
+        st.success("부족이 없어 대응 후보가 필요 없습니다.")
+        return {}
+    if data.substitute is None:
+        st.caption("대체표.csv가 없어 대체 원료 후보는 만들지 않았습니다('원료 소요·재고'에서 올릴 수 있습니다).")
+    shown = pd.DataFrame({
+        "대응안": table["대응안"], "생산 부족": table["생산부족_kg"].map(lambda v: f"{max(v, 0):,.0f}kg"),
+        "영향 계획": table["영향계획건수"].map(lambda v: f"{v}건"), "납기 위험": table["납기위험건수"].map(lambda v: f"{v}건"),
+        "남은 감산 손실": table["남은감산손실"].map(_won), "위약금": table["위약금"].map(_won), "추가 비용": table["추가비용"].map(_won),
+        "합계(참고)": table["합계"].map(_won), "확인할 점": table["경고"],
+    })
+    st.dataframe(shown, hide_index=True, use_container_width=True)
+    if table["합계"].isna().all():
+        st.caption("판매가·단가가 없어 금액은 계산하지 않았습니다. 생산계획의 판매가_원kg, 재고·입고의 단가_원kg를 넣으면 비교합니다.")
+    else:
+        st.caption("합계 = 남은 감산 손실(공헌이익) + 위약금 + 추가 비용(긴급 현물 할증·대체 원료비 차이). 계획 물량을 모두 만든다는 보장이 아니며, 금액이 작다고 실행 가능한 안이라는 뜻은 아닙니다.")
+    for c in cands[1:]:
+        with st.expander(f"{c.name} · 무엇을 바꿨나" + (" · 확인 필요" if c.warnings else "")):
+            for n in c.notes:
+                st.write("· " + n)
+            for w in c.warnings:
+                st.warning(w)
+    names = [c.name for c in cands]
+    current = st.session_state.get("planning_seed", "감산 수용")
+    pick = st.selectbox("편집기에 불러올 대응안", names, index=names.index(current) if current in names else 0)
+    if pick != current:
+        st.session_state["planning_seed"] = pick
+        st.rerun()
+    return {c.name: c.data for c in cands}
+
+
 def render_planning():
     st.subheader("생산 차질·대응안 비교")
     st.write("원료 부족이 어떤 제품·주문에 영향을 주는지 확인하고, 대응을 바꿔 비교합니다.")
@@ -67,34 +141,51 @@ def render_planning():
     baseline = show_impact(data)
     if baseline is None:
         return
+    from lib import ui_company as UC
+    settings = UC.get_settings()
+    seed_data = _auto_candidates(data, settings)
     st.markdown("#### 대응안 입력 · 원본은 그대로 유지됩니다")
-    st.caption("입고 앞당기기: 기존 행의 입고예정일 수정 / 긴급 확보: 입고 행 추가 / 생산일 변경: 계획 날짜 수정. 해동이 필요하면 사용가능일도 함께 검토하세요.")
-    name = st.text_input("대응안 이름", "입고 일정 조정 검토")
-    sig = P.fingerprint(data)
+    st.caption("입고 앞당기기: 기존 행의 입고예정일 수정 / 긴급 확보: 입고 행 추가 / 생산일 변경: 계획 날짜 수정 / 대체: 배합표에서 원료·투입량 변경. "
+               "해동이 필요하면 사용가능일도 함께 검토하세요.")
+    seed = st.session_state.get("planning_seed", "감산 수용")
+    base_data = seed_data.get(seed, data)
+    name = st.text_input("대응안 이름", seed if seed != "감산 수용" else "입고 일정 조정 검토", key=f"scenario_name_{seed}")
+    sig = P.fingerprint(data) + "_" + P.fingerprint(base_data)
     with st.expander("생산계획 편집 · 날짜·수량·납기·우선순위", expanded=True):
-        plan = st.data_editor(data.plan, num_rows="fixed", use_container_width=True, hide_index=True,
+        plan = st.data_editor(base_data.plan, num_rows="fixed", use_container_width=True, hide_index=True,
                               disabled=["제품", "주문번호"], key=f"plan_edit_{sig}")
     with st.expander("입고 예정 편집 · 추가 확보 물량도 여기에 입력", expanded=True):
-        inbound = data.inbound
+        inbound = base_data.inbound
         if inbound is None:
             inbound = pd.DataFrame(columns=C.REQUIRED["inbound"] + ["보관", "공급처", "사용상태", "사용가능일", "사용기한"])
         inbound = st.data_editor(inbound, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"inbound_edit_{sig}",
                                 column_config={"보관": st.column_config.SelectboxColumn(options=["냉장", "냉동"]),
                                                "사용상태": st.column_config.SelectboxColumn(options=["사용가능", "검사대기", "사용보류"], default="사용가능")})
-    candidate = P.change_scenario(data, plan=plan, inbound=inbound)
+    with st.expander("배합표 편집 · 대체 배합", expanded=seed == "대체 원료"):
+        recipe = st.data_editor(base_data.recipe, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"recipe_edit_{sig}",
+                                column_config={"보관": st.column_config.SelectboxColumn(options=["냉장", "냉동"]),
+                                               "원산지": st.column_config.SelectboxColumn(options=["국산", "수입"])})
+        st.caption("대체 배합은 '제품명 (대체)'처럼 새 제품으로 두고 생산계획의 해당 날짜만 그 제품으로 바꾸면 원래 배합과 섞이지 않습니다.")
+    candidate = P.change_scenario(data, plan=plan, inbound=inbound, recipe=recipe)
     if not candidate.ready():
         st.error("대응안 입력을 확인하세요. 잘못된 입력으로 개선 효과를 계산하지 않습니다.")
         st.dataframe(pd.DataFrame([vars(i) for i in candidate.issues if i.level == "오류"]), hide_index=True)
         return
     try:
-        from lib import ui_company as UC
-        before, after, table = P.comparison(data, candidate, UC.get_settings())
+        before, after, table = P.comparison(data, candidate, settings)
     except ValueError as exc:
         st.warning(str(exc))
         return
     st.markdown("#### 기존 계획과 대응안 비교")
-    st.dataframe(table, hide_index=True, use_container_width=True)
-    st.caption("같은 종료일까지 비교합니다. 생산량을 줄여 부족이 사라진 경우는 개선으로 단정할 수 없습니다. 아래 주문별 계획량·납기를 함께 확인하세요. 대응안별 비용 비교는 하지 않습니다(제품 원료비와 단가 변동 영향은 '원가 영향' 화면).")
+    m0, m1 = R.money(data, before, settings), R.money(candidate, after, settings)
+    m0["추가비용"], m1["추가비용"] = 0.0, R.extra_cost(data, candidate, settings)
+    for m in (m0, m1):
+        m["합계"] = m["감산손실"] + m["위약금"] + m["추가비용"]
+    money_rows = pd.DataFrame([{"지표": f"{k}_원", "기존": m0[k], "대응안": m1[k], "변화": m1[k] - m0[k]} for k in ("감산손실", "위약금", "추가비용", "합계")])
+    st.dataframe(pd.concat([table, money_rows], ignore_index=True), hide_index=True, use_container_width=True)
+    st.caption("같은 종료일까지 비교합니다. 생산량을 줄여 부족이 사라진 경우는 개선으로 단정할 수 없습니다. 아래 주문별 계획량·납기를 함께 확인하세요. "
+               "감산손실은 공헌이익(판매가 − 원료비) 기준입니다. 추가비용 = 늘어난 입고의 단가 할증분(입고 행의 단가_원kg − 재구매 단가) + 배합 변경으로 바뀐 원료비. "
+               "입고 행에 단가를 안 적으면 할증 0으로 봅니다.")
     if before.metrics()["계획량_kg"] != after.metrics()["계획량_kg"]:
         st.warning("대응안에서 총 계획량이 변경되었습니다. 감산·증산과 원료 확보 효과를 구분하세요.")
     changes = before.orders.set_index("계획행")[["주문번호", "제품", "날짜", "납기", "계획물량_kg", "생산가능_kg", "부족량_kg", "납기상태"]].join(

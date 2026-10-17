@@ -42,13 +42,28 @@ def _lots(data: C.CompanyData) -> pd.DataFrame:
     return lots[C.MATERIAL_KEY + ["구분", "날짜", "수량", PRICE]]
 
 
+_PRICE_CACHE: list = []  # [(재고 표, 입고 표, 배합표, 결과)] — 같은 표 객체면 다시 계산하지 않는다
+
+
 def material_prices(data: C.CompanyData) -> pd.DataFrame:
     """원료별 단가 요약. 단가가 하나도 없으면 단가는 NaN(0으로 채우지 않음)."""
+    for inv, inb, rec, out in _PRICE_CACHE:
+        if inv is data.inventory and inb is data.inbound and rec is data.recipe:
+            return out.copy()
+    out = _material_prices(data)
+    _PRICE_CACHE.append((data.inventory, data.inbound, data.recipe, out))
+    del _PRICE_CACHE[:-16]
+    return out.copy()
+
+
+def _material_prices(data: C.CompanyData) -> pd.DataFrame:
     lots = _lots(data)
     keys = set(lots[C.MATERIAL_KEY].itertuples(index=False, name=None)) | set(data.recipe[C.MATERIAL_KEY].itertuples(index=False, name=None))
+    groups = {k: g for k, g in lots.groupby(C.MATERIAL_KEY)}  # 원료마다 표 전체를 다시 훑지 않도록 한 번에 나눈다
+    empty = lots.iloc[0:0]
     rows = []
     for key in sorted(keys):
-        g = lots[(lots[C.MATERIAL_KEY] == pd.Series(key, index=C.MATERIAL_KEY)).all(axis=1)]
+        g = groups.get(key, empty)
         priced = g[g[PRICE].notna() & (g["수량"] > 0)]
         total = float(g["수량"].sum())
         avg = float((priced[PRICE] * priced["수량"]).sum() / priced["수량"].sum()) if len(priced) else math.nan
@@ -142,23 +157,29 @@ def _plan_future(data: C.CompanyData) -> pd.DataFrame:
     return data.plan[data.plan["날짜"] > data.inventory["기준일"].max()]
 
 
+def thaw_losses(data: C.CompanyData, settings: C.Settings | None = None) -> dict[tuple, float]:
+    """원료 -> 해동 감량률(%). 냉장은 0. 재고 CSV에 값이 있으면 그 원료의 첫 행 값, 없으면 기본값."""
+    st_ = settings or C.Settings()
+    first = {k: g.iloc[0] for k, g in data.inventory.groupby(C.MATERIAL_KEY)}
+    keys = set(first) | set(data.recipe[C.MATERIAL_KEY].itertuples(index=False, name=None))
+    return {k: C.lot_thaw(first.get(k, {}), k[2], k[3], st_)[1] for k in keys}
+
+
 def thaw_loss(data: C.CompanyData, key: tuple, settings: C.Settings | None = None) -> float:
-    """원료의 해동 감량률(%). 냉장은 0. 재고 CSV에 값이 있으면 그 값, 없으면 기본값."""
-    inv = data.inventory
-    rows = inv[(inv[C.MATERIAL_KEY] == pd.Series(key, index=C.MATERIAL_KEY)).all(axis=1)]
-    return C.lot_thaw(rows.iloc[0] if len(rows) else {}, key[2], key[3], settings or C.Settings())[1]
+    return thaw_losses(data, settings).get(tuple(key), C.lot_thaw({}, key[2], key[3], settings or C.Settings())[1])
 
 
 def components(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, float] | None = None,
                settings: C.Settings | None = None) -> pd.DataFrame:
     """제품 x 원료 원료비 구성 (원/제품kg). 냉동 원료는 해동 감량만큼 더 사야 하므로 단가 ÷ (1 − 감량률)로 본다."""
     price = unit_price(material_prices(data), basis)
+    losses = thaw_losses(data, settings)
     pct = change_pct or {}
     rows = []
     for (product, *key), ratio in data.recipe.groupby(["제품"] + C.MATERIAL_KEY)["투입량_kg"].sum().items():
         label = C.ingredient_label(*key)
         p, src = price.get(label, (math.nan, "단가 없음"))
-        loss = thaw_loss(data, tuple(key), settings)
+        loss = losses[tuple(key)]
         eff = p / (1 - loss / 100)
         eff2 = eff * (1 + pct.get(label, 0.0) / 100)
         rows.append({"제품": product, "원료": label, "투입량_kg": ratio, "단가": p, "해동감량률": loss,

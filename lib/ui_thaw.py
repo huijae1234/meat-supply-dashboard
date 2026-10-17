@@ -161,6 +161,18 @@ def render_thaw(k: float, layout) -> None:
                                    "못 맞추는 양": probs["부족_kg"].map(lambda v: f"{v:,.0f}kg"), "이유": probs["이유"]}),
                      hide_index=True, use_container_width=True)
         st.caption("날짜는 쓰는 날(용량 초과는 해동 시작일)입니다. 해동 시간 부족은 생산일을 늦추거나 냉장 원료로 대체하는 검토가 필요합니다('생산 차질·대응안').")
+        timing = probs["이유"].str.startswith(("해동 시간 부족", "해동 투입일 없음", "해동 후 보관 한도")).any()
+        stock = probs["이유"].str.startswith("냉동 재고 부족").any()
+        seeds = (["생산일 늦추기"] if timing else []) + (["긴급 현물 구매"] if stock else []) + (["대체 원료"] if timing or stock else [])
+        if seeds:
+            for col, seed in zip(st.columns(len(seeds)), seeds):
+                if col.button(f"'{seed}' 대응안으로 검토", key=f"thaw_to_{seed}", use_container_width=True,
+                              help="생산 차질·대응안 화면으로 이동해 이 후보를 편집기에 불러옵니다. 원본은 바뀌지 않습니다."):
+                    st.session_state["planning_seed"] = seed
+                    from lib import nav
+                    if "planning" in nav.PAGES:
+                        st.switch_page(nav.PAGES["planning"])
+                    st.info("'생산 차질·대응안' 화면을 열면 이 후보가 편집기에 불러와져 있습니다.")
     else:
         st.success("명시된 생산계획 기간에 해동으로 맞추지 못하는 날이 없습니다.")
 

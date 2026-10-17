@@ -77,13 +77,15 @@ def simulate(data: C.CompanyData, end_date=None, settings: C.Settings | None = N
     return Feasibility(pd.DataFrame(orders), pd.DataFrame(material_days), fingerprint(data))
 
 
-def change_scenario(data: C.CompanyData, plan=None, inbound=None) -> C.CompanyData:
+def change_scenario(data: C.CompanyData, plan=None, inbound=None, recipe=None) -> C.CompanyData:
     """화면에서 편집한 복사본만 검증한다. 원본 CSV와 실제 주문은 변경하지 않는다."""
     raw = {k: getattr(data, k).copy(deep=True) if getattr(data, k) is not None else None for k in C.FILES}
     if plan is not None:
         raw["plan"] = plan
     if inbound is not None:
         raw["inbound"] = inbound
+    if recipe is not None:
+        raw["recipe"] = recipe
     result = C.load_data(raw)
     if result.ready():
         base = result.inventory["기준일"].max()

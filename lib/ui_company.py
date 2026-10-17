@@ -203,7 +203,7 @@ def render_company(k: float, layout) -> None:
     if top[1].button("올려 둔 파일 사용", use_container_width=True):
         st.session_state["co_source"] = "saved"
         st.rerun()
-    confirm_clear = st.checkbox("저장한 원본 CSV 4종 삭제에 동의합니다 (설정·조치 이력은 유지)")
+    confirm_clear = st.checkbox("저장한 원본 CSV 삭제에 동의합니다 (설정·조치 이력은 유지)")
     if top[2].button("저장된 파일 지우기", use_container_width=True, disabled=not confirm_clear):
         n = C.clear_saved()
         st.session_state["co_source"] = "saved"
@@ -217,7 +217,7 @@ def render_company(k: float, layout) -> None:
     cols = st.columns(2)
     for i, kind in enumerate(C.FILES):
         with cols[i % 2], st.container(border=True):
-            st.markdown(f"**{C.FILE_LABELS[kind]}** `{C.FILES[kind]}`" + (" (선택)" if kind == "inbound" else ""))
+            st.markdown(f"**{C.FILE_LABELS[kind]}** `{C.FILES[kind]}`" + (" (선택)" if kind in C.OPTIONAL_FILES else ""))
             st.caption("열: " + ", ".join(C.REQUIRED[kind]) + (" · 선택: " + ", ".join(C.OPTIONAL[kind]) if C.OPTIONAL[kind] else ""))
             f = st.file_uploader(C.FILE_LABELS[kind], type="csv", key=f"up_{kind}", label_visibility="collapsed")
             if f is not None:
