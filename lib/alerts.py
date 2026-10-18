@@ -89,6 +89,8 @@ def find_alerts(cfg: dict) -> list[dict]:
         if any(v is not None for v in saved.values()):
             data = CO.load_data(saved)
             if data.ready():
+                from lib import orders as OR, worklog as WL
+                data = OR.apply_pending(data, OR.pending_inbound(WL.read_events(), data, "올려 둔 파일"))  # 발주 완료로 기록한 물량은 알리지 않는다
                 proj = CO.project(data, today=CO.today_kst(), settings=CO.load_settings())
                 if not proj.actionable:
                     out.append({"rule": "company", "level": "주의", "key": f"company-stale:{proj.base_date:%Y-%m-%d}",

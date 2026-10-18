@@ -66,14 +66,30 @@ def get_settings() -> C.Settings:
         st.stop()
 
 
-def current_company() -> tuple[C.CompanyData | None, str]:
-    """(자사 데이터, 출처 이름). 올린 파일이 없고 샘플도 안 켰으면 (None, '')."""
+def current_company(note: bool = True) -> tuple[C.CompanyData | None, str]:
+    """(자사 데이터, 출처 이름). 올린 파일이 없고 샘플도 안 켰으면 (None, '').
+
+    조치 이력에 '발주 완료'로 기록했지만 입고예정.csv에 아직 없는 물량은 입고 예정(미반영)으로 계산에 더한다(원본은 그대로).
+    """
     if st.session_state.get("co_source") == "sample":
-        return C.load_data(C.sample_tables()), "샘플(가짜) 데이터"
-    saved = C.load_saved()
-    if not any(v is not None for v in saved.values()):
-        return None, ""
-    return C.load_data(saved), "올려 둔 파일"
+        data, label = C.load_data(C.sample_tables()), "샘플(가짜) 데이터"
+        events = st.session_state.get("sample_worklog", [])
+    else:
+        saved = C.load_saved()
+        if not any(v is not None for v in saved.values()):
+            return None, ""
+        data, label = C.load_data(saved), "올려 둔 파일"
+        from lib import worklog as W
+        events = W.read_events()
+    if data.ready() and st.session_state.get("apply_pending", True) and events:
+        from lib import orders as O
+        rows = O.pending_inbound(events, data, label)
+        if len(rows):
+            data = O.apply_pending(data, rows)
+            if note:
+                st.info(f"'발주 완료'로 기록한 {len(rows)}건({', '.join(sorted(set(rows['공급처'].astype(str))))})을 **입고 예정(미반영)**으로 계산에 넣었습니다. "
+                        "입고예정.csv에 반영해 다시 올리면 자동으로 빠집니다. 끄려면 '현장 지시서'에서 해제하세요.")
+    return data, label
 
 
 # ------------------------------------------------------------------ 오늘의 현황
@@ -101,6 +117,8 @@ def _company_block(m: A.Market) -> bool:
     from lib.ui_cost import today_summary
     from lib.ui_thaw import today_summary as thaw_summary
     thaw_summary(data)
+    from lib.ui_orders import today_summary as orders_summary
+    orders_summary(data, label)
     today_summary(data)
     acts = A.company_actions(proj, m)
     counts = pd.Series([a["level"] for a in acts]).value_counts()

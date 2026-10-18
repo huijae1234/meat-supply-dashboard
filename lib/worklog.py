@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from lib import company as C
 
-STATES = ["확인 필요", "담당자 지정", "공급처 협의", "입고 일정 확정", "재계산", "해결 확인"]
+STATES = ["확인 필요", "담당자 지정", "공급처 협의", "입고 일정 확정", "재계산", "실행 완료", "해결 확인"]  # 실행 완료: 발주·해동 투입 등 현장 실행 기록
 
 
 def append_event(title, owner, deadline, state, action, result, context, case_id=None):

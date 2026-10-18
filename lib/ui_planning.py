@@ -194,13 +194,32 @@ def render_planning():
     with st.expander("원료별 사용 가능 잔량·미충족 소요"):
         st.dataframe(after.materials, hide_index=True)
         st.caption("미충족 소요는 생산하지 못한 제품에 대응하는 투입량입니다. 해당 원료 자체가 모두 부족하다는 뜻은 아닙니다.")
+    label_changes = R.origin_changes(data, candidate)
+    if label_changes:
+        st.warning("원산지 표시 확인이 필요한 대응안입니다: " + "; ".join(label_changes) +
+                   ". 조치 기록에 연결하면 확인 항목(표시사항·포장재·고객 승인·품질·적용 로트)이 함께 들어갑니다.")
     context = {"출처": label, "판단일": str(C.today_kst().date()), "기존입력ID": before.fingerprint,
+               "원산지확인": label_changes, "확인항목": R.LABEL_CHECKS if label_changes else [],
                "대응입력ID": after.fingerprint, "대응안": name, "비교": table.to_dict(orient="records"),
                "기존입력": json.loads(P.snapshot(data)), "대응입력": json.loads(P.snapshot(candidate))}
     st.download_button("대응안·계산 근거 내려받기", json.dumps(context, ensure_ascii=False, indent=2), "production-scenario.json", "application/json")
     if st.button("이 대응안을 조치 기록에 연결"):
         st.session_state["pending_action"] = context
         st.success("조치 이력 화면으로 이동해 담당자·기한·협의 내용을 입력해 저장하세요. 원본 CSV와 실제 발주는 바뀌지 않았습니다.")
+
+
+def add_record(title, owner, deadline, state, action, result, context, case_id=None) -> str:
+    """조치 이력에 한 건 남긴다. 샘플 모드는 브라우저 세션에만, 실제 파일 모드는 worklog.sqlite3에."""
+    if st.session_state.get("co_source") == "sample":
+        from uuid import uuid4
+        events = st.session_state.get("sample_worklog", [])
+        if not str(title).strip() or not str(owner).strip() or not str(action).strip():
+            raise ValueError("제목·담당자·대응 내용을 입력하세요.")
+        event = {"번호": len(events) + 1, "사건ID": case_id or uuid4().hex, "기록시각": str(pd.Timestamp.now(tz="Asia/Seoul")),
+                 "제목": title, "담당자": owner, "기한": str(deadline), "상태": state, "대응": action, "결과": result, "근거": context}
+        st.session_state["sample_worklog"] = [event, *events]
+        return event["사건ID"]
+    return W.append_event(title, owner, deadline, state, action, result, context, case_id)
 
 
 def render_worklog():
@@ -223,12 +242,16 @@ def render_worklog():
     context = pending if attach and correct_source else current.get("근거", {})
     if context:
         st.caption(f"연결 근거: {context.get('대응안', '')} · 입력 ID {context.get('대응입력ID', '')} · 판단일 {context.get('판단일', '')}")
+        if context.get("확인항목"):
+            st.warning("원산지 표시 확인 항목이 대응 내용에 들어가 있습니다. 확인한 항목은 □를 ■로 바꾸고, 결과 칸에 확인 근거를 남기세요.")
     with st.form(f"worklog_{selected}"):
         title = st.text_input("기록 제목", current.get("제목", context.get("대응안", "")))
         owner = st.text_input("담당자 또는 담당 역할", current.get("담당자", ""))
         deadline = st.date_input("조치 기한", value=pd.Timestamp(current.get("기한", C.today_kst())).date())
         state = st.selectbox("진행 상태", W.STATES, index=W.STATES.index(current.get("상태", W.STATES[0])))
-        action = st.text_area("선택한 대응·협의 내용·확정 입고일", current.get("대응", ""))
+        checks = context.get("확인항목", []) if not current else []
+        default_action = current.get("대응", "") or ("\n".join(["[원산지 표시 확인] " + "; ".join(context.get("원산지확인", []))] + [f"□ {c}" for c in checks]) if checks else "")
+        action = st.text_area("선택한 대응·협의 내용·확정 입고일", default_action, height=160 if checks else None)
         result = st.text_area("확인 결과·재계산 결과·해결 근거", current.get("결과", ""))
         submitted = st.form_submit_button("새 버전으로 기록 저장")
     if submitted:

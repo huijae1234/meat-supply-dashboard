@@ -772,6 +772,7 @@ def page_live():
 from lib.ui_planning import render_planning, render_worklog
 from lib.ui_cost import render_cost
 from lib.ui_thaw import render_thaw
+from lib.ui_orders import render_orders
 
 
 def page_cost():
@@ -780,6 +781,10 @@ def page_cost():
 
 def page_thaw():
     render_thaw(k, layout)
+
+
+def page_orders():
+    render_orders(k, layout)
 
 
 from lib import nav
@@ -791,6 +796,7 @@ _nav = st.navigation({
                  st.Page(page_thaw, title="해동 계획", url_path="thaw"),
                  st.Page(page_cost, title="원가 영향", url_path="cost"),
                  nav.PAGES["planning"],
+                 st.Page(page_orders, title="현장 지시서", url_path="orders"),
                  st.Page(render_worklog, title="조치 이력", url_path="worklog")],
     "시장 참고": [st.Page(page_live, title="실제 데이터", url_path="live"),
                  st.Page(page_analysis, title="실제 분석·예측", url_path="analysis")],

@@ -282,3 +282,37 @@ def compare(data: C.CompanyData, cands: list[Candidate], settings: C.Settings | 
                      "계획량_kg": mt["계획량_kg"], "남은감산손실": mo["감산손실"], "위약금": mo["위약금"], "추가비용": extra,
                      "합계": total, "경고": " / ".join(c.warnings)})
     return pd.DataFrame(rows)
+
+
+LABEL_CHECKS = [
+    "제품 표시사항(원산지·원재료명·함량) 변경 필요 여부 확인",
+    "변경 포장재·라벨 재고와 교체 일정 확인",
+    "거래처(고객) 사전 승인",
+    "품질팀 확인(부위·원산지 변경에 따른 규격·식감)",
+    "대체 배합을 적용한 생산일·로트 기록",
+]
+
+
+def _top(recipe: pd.DataFrame, product: str, n: int = 3) -> list[tuple]:
+    g = recipe[recipe["제품"] == product].groupby(["육종", "부위", "원산지"])["투입량_kg"].sum().sort_values(ascending=False)
+    return [k for k in g.index[:n]]
+
+
+def origin_changes(original: C.CompanyData, cand: C.CompanyData) -> list[str]:
+    """대응안에서 원산지 표시를 다시 봐야 하는 제품. 새 원산지가 들어오거나 배합 비율 상위 3개 원료(부위·원산지)가 바뀌면 알린다.
+
+    실제 표시 대상·순위 기준은 관련 법규와 사내 기준을 따른다(여기서는 확인이 필요한지만 찾는다).
+    """
+    out = []
+    base = original.inventory["기준일"].max()
+    for product in sorted(set(cand.plan.loc[cand.plan["날짜"] > base, "제품"])):
+        m = _VARIANT.match(product)
+        origin = product if product in set(original.recipe["제품"]) else (m.group(1) if m else None)
+        if origin is None:
+            continue
+        before, after = _top(original.recipe, origin), _top(cand.recipe, product)
+        new_origin = {(k[0], k[2]) for k in after} - {(k[0], k[2]) for k in _top(original.recipe, origin, 99)}
+        if before != after or new_origin:
+            fmt = lambda ks: ", ".join(f"{k[1]}({k[2]})" for k in ks)  # noqa: E731
+            out.append(f"{product}: 배합 상위 원료 {fmt(before)} → {fmt(after)}")
+    return out
