@@ -11,11 +11,16 @@ from lib import alerts, live
 from lib import live_analysis as LA
 from lib import theme
 from lib import ui_company as UC
+from lib import public_demo
 from lib.plain import VERDICT, deviation_word, model_name, vs_normal
 from lib.data import OUTLIER_RATIO, SPECIES_KO, get_source, last_actual_week, load_all
 
 warnings.filterwarnings("ignore")
 st.set_page_config(page_title="고기가 부족하게 돼지 않겠소?", page_icon="🥩", layout="wide")
+
+if public_demo.enabled():
+    st.session_state["co_source"] = "sample"
+    st.info("공개 체험판입니다. 공장 수치는 모두 합성·샘플 데이터이며, 회사 CSV 업로드와 서버 저장은 지원하지 않습니다.")
 
 st.markdown(theme.CSS, unsafe_allow_html=True)
 
@@ -112,7 +117,10 @@ def page_today():
 
 
 def page_company():
-    UC.render_company(k, layout)
+    if public_demo.enabled():
+        UC.render_public_company(k, layout)
+    else:
+        UC.render_company(k, layout)
 
 
 def _syn_title(name: str) -> None:

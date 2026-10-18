@@ -10,6 +10,9 @@ STATES = ["확인 필요", "담당자 지정", "공급처 협의", "입고 일�
 
 
 def append_event(title, owner, deadline, state, action, result, context, case_id=None):
+    from lib import public_demo
+    if public_demo.enabled():
+        raise ValueError("공개 체험판의 기록은 브라우저 세션에만 남겨 주세요.")
     if not title.strip() or not owner.strip() or not action.strip():
         raise ValueError("제목·담당자·대응 내용을 입력하세요.")
     if state not in STATES or (state == "해결 확인" and not result.strip()):
@@ -25,6 +28,9 @@ def append_event(title, owner, deadline, state, action, result, context, case_id
 
 
 def read_events():
+    from lib import public_demo
+    if public_demo.enabled():
+        return []
     path = C.COMPANY_DIR / "worklog.sqlite3"
     if not path.exists():
         return []

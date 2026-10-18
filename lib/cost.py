@@ -297,6 +297,9 @@ MAX_ASSUMPTIONS = 50
 
 
 def load_assumptions() -> list[dict]:
+    from lib import public_demo
+    if public_demo.enabled():
+        return []
     import json
     path = C.COMPANY_DIR / ASSUMPTION_FILE
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
@@ -304,6 +307,9 @@ def load_assumptions() -> list[dict]:
 
 def save_assumption(entry: dict) -> list[dict]:
     """이름이 같으면 새 것으로 바꾼다(최신이 앞). 최대 50개."""
+    from lib import public_demo
+    if public_demo.enabled():
+        raise ValueError("공개 체험판에서는 가정을 서버에 저장할 수 없습니다.")
     import json
     if not str(entry.get("이름", "")).strip():
         raise ValueError("가정 이름을 적어 주세요.")

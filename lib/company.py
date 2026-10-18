@@ -519,6 +519,9 @@ def freshness(data: CompanyData, today: pd.Timestamp) -> str:
 
 
 def load_settings() -> Settings:
+    from lib import public_demo
+    if public_demo.enabled():
+        return Settings()
     path = COMPANY_DIR / "settings.json"
     if not path.exists():
         return Settings()
@@ -578,6 +581,9 @@ def _validate_settings(settings: Settings) -> None:
 
 
 def save_settings(settings: Settings) -> None:
+    from lib import public_demo
+    if public_demo.enabled():
+        raise ValueError("공개 체험판에서는 설정을 서버에 저장할 수 없습니다.")
     _validate_settings(settings)
     COMPANY_DIR.mkdir(parents=True, exist_ok=True)
     target = COMPANY_DIR / "settings.json"
@@ -825,11 +831,17 @@ def project(data: CompanyData, horizon: int = HORIZON_DAYS, today: pd.Timestamp 
 
 # ------------------------------------------------------------------ 저장 / 불러오기 / 양식
 def save_raw(kind: str, raw: bytes) -> None:
+    from lib import public_demo
+    if public_demo.enabled():
+        raise ValueError("공개 체험판에서는 CSV를 서버에 저장할 수 없습니다.")
     COMPANY_DIR.mkdir(parents=True, exist_ok=True)
     (COMPANY_DIR / FILES[kind]).write_bytes(raw)
 
 
 def load_saved() -> dict[str, pd.DataFrame | None]:
+    from lib import public_demo
+    if public_demo.enabled():
+        return {kind: None for kind in FILES}
     out = {}
     for kind, name in FILES.items():
         p = COMPANY_DIR / name
@@ -838,6 +850,9 @@ def load_saved() -> dict[str, pd.DataFrame | None]:
 
 
 def clear_saved() -> int:
+    from lib import public_demo
+    if public_demo.enabled():
+        raise ValueError("공개 체험판에서는 서버 파일을 삭제할 수 없습니다.")
     n = 0
     for name in FILES.values():
         p = COMPANY_DIR / name

@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from lib import company as C, planning as P, response as R, worklog as W
+from lib import public_demo
 
 
 def show_impact(data, compact=False):
@@ -59,7 +60,7 @@ def _capacity_settings(data, saved) -> None:
                                 column_config={"하루 최대(kg)": st.column_config.NumberColumn(min_value=0.0, step=100.0, format="%,.0f")})
             st.caption("0이면 제한 없음. 작업일은 '해동 계획'의 투입 요일·휴무일을 함께 씁니다.")
         shift = st.number_input("넘치는 양을 앞뒤 몇 작업일까지 옮길까요", 0, 14, int(saved.shift_days), key="cap_shift")
-        if st.button("생산 능력 저장 · 모든 계산에 적용", key="cap_save"):
+        if st.button("생산 능력 저장 · 모든 계산에 적용", key="cap_save", disabled=public_demo.enabled()):
             draft = copy.deepcopy(saved)
             draft.lines = {r["제품"]: str(r["라인"]).strip() for _, r in t1.iterrows() if str(r["라인"]).strip() not in ("", "nan", "None")}
             draft.line_capacity = {r["라인"]: float(r["하루 최대(kg)"] or 0) for _, r in t2.iterrows() if (r["하루 최대(kg)"] or 0) > 0}
@@ -122,7 +123,7 @@ def _get_data():
     if left.button("샘플(가짜) 데이터로 시험", key="planning_sample"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="planning_saved"):
+    if not public_demo.enabled() and right.button("올려 둔 파일 사용", key="planning_saved"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     data, label = UC.current_company()
@@ -150,7 +151,7 @@ def _spot_settings(saved: C.Settings) -> None:
         draft.spot_premium = float(a.number_input("단가 할증 (%)", 0.0, 200.0, float(saved.spot_premium), 1.0, key="spot_premium"))
         draft.spot_lead = {"국산": int(b.number_input("도착 일수 · 국산", 0, 30, int(saved.spot_lead["국산"]), key="spot_lead_dom")),
                            "수입": int(c.number_input("도착 일수 · 수입", 0, 30, int(saved.spot_lead["수입"]), key="spot_lead_imp"))}
-        if st.button("긴급 현물 가정 저장", key="spot_save"):
+        if st.button("긴급 현물 가정 저장", key="spot_save", disabled=public_demo.enabled()):
             try:
                 C.save_settings(draft)
             except ValueError as exc:

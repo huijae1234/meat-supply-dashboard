@@ -9,6 +9,7 @@ import streamlit as st
 
 from lib import advice as A
 from lib import company as C
+from lib import public_demo
 from lib import cost as K
 from lib import theme
 from lib.plain import change_text, md, ton, won, won_big
@@ -175,7 +176,7 @@ def render_cost(k: float, layout) -> None:
     if left.button("샘플(가짜) 데이터로 시험", key="cost_sample", width="stretch"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="cost_saved", width="stretch"):
+    if not public_demo.enabled() and right.button("올려 둔 파일 사용", key="cost_saved", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     data, label = UC.current_company()

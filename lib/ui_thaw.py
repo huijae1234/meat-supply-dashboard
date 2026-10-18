@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import company as C
+from lib import public_demo
 from lib import theme
 from lib import thaw as T
 from lib.plain import md, ton
@@ -39,7 +40,7 @@ def _settings_box(saved: C.Settings) -> None:
                                              help="해동이 끝난 뒤 쓰기 전까지 냉장에서 기다릴 수 있는 최대 일수. 휴무일·용량 때문에 앞당길 때 이 한도를 넘지 않습니다."))
         hol = st.text_input("휴무일 (쉼표로 구분, 예: 2026-12-25, 2027-01-01)", ", ".join(saved.holidays), key="thaw_holidays")
         draft.holidays = sorted({h.strip() for h in hol.replace(chr(10), ",").split(",") if h.strip()})
-        if st.button("해동 기본값 저장 · 모든 계산과 자동 알림에 적용", key="thaw_save"):
+        if st.button("해동 기본값 저장 · 모든 계산과 자동 알림에 적용", key="thaw_save", disabled=public_demo.enabled()):
             try:
                 C.save_settings(draft)
             except ValueError as exc:
@@ -110,7 +111,7 @@ def render_thaw(k: float, layout) -> None:
     if left.button("샘플(가짜) 데이터로 시험", key="thaw_sample", width="stretch"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="thaw_saved", width="stretch"):
+    if not public_demo.enabled() and right.button("올려 둔 파일 사용", key="thaw_saved", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     saved = UC.get_settings()

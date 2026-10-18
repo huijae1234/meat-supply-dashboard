@@ -17,6 +17,7 @@ from lib import advice as A
 from lib import company as C
 from lib import live
 from lib import theme
+from lib import public_demo
 from lib.plain import VERDICT, VERDICT_ICON, days, md, ton, vs_normal, vs_year, change_text, won_big
 
 
@@ -33,7 +34,7 @@ def market_cached(sig: str, k: float) -> A.Market:
 
 # ------------------------------------------------------------------ 접근 제한 (우리 공장 데이터만)
 def password_set() -> bool:
-    return bool(os.environ.get("COMPANY_PASSWORD"))
+    return not public_demo.enabled() and bool(os.environ.get("COMPANY_PASSWORD"))
 
 
 def unlocked() -> bool:
@@ -75,7 +76,7 @@ def current_company(note: bool = True) -> tuple[C.CompanyData | None, str]:
 
     조치 이력에 '발주 완료'로 기록했지만 입고예정.csv에 아직 없는 물량은 입고 예정(미반영)으로 계산에 더한다(원본은 그대로).
     """
-    if st.session_state.get("co_source") == "sample":
+    if public_demo.enabled() or st.session_state.get("co_source") == "sample":
         data, label = C.load_data(C.sample_tables()), "샘플(가짜) 데이터"
         events = st.session_state.get("sample_worklog", [])
     else:
@@ -205,6 +206,38 @@ def _action_card(a: dict) -> None:
 # ------------------------------------------------------------------ 우리 공장
 def _template_csv(kind: str) -> bytes:
     return C.sample_tables()[kind].to_csv(index=False).encode("utf-8-sig")  # 엑셀에서 한글이 안 깨지게 BOM 포함
+
+
+def render_public_company(k: float, layout) -> None:
+    """공개 링크에는 샘플 계산만 표시하고 파일 입출력 UI는 만들지 않는다."""
+    st.subheader("원료 소요·재고 — 공개 샘플")
+    st.caption("모든 공장 수치는 오늘 날짜에 맞춘 가짜 데이터입니다. 실제 발주·생산 지시가 아닙니다.")
+    data, label = current_company()
+    if data is None or not data.ready():
+        st.error("샘플 데이터를 읽지 못했습니다.")
+        return
+    proj = C.project(data, today=C.today_kst(), settings=get_settings())
+    from lib.ui_planning import show_impact
+    show_impact(data, compact=True)
+    st.markdown("#### 원료별 소진·발주 검토")
+    summary = proj.summary
+    table = pd.DataFrame({
+        "상태": summary["상태"],
+        "원료": summary["원료"],
+        "현재고": summary["현재고_kg"].map(ton),
+        "재고일수": summary["재고일수"].map(days),
+        "소진 예정": summary["소진예정일"].map(md),
+        "발주 기한": summary["발주기한"].map(md),
+        "발주량(참고)": summary["발주량_kg"].map(lambda value: ton(value) if value > 0 else "-"),
+    })
+    st.dataframe(table, hide_index=True, width="stretch")
+    st.caption("발주량은 샘플 가정에 따른 참고 계산입니다. 품질·납기·실제 입고는 확인되지 않았습니다.")
+    try:
+        market = market_cached(live_sig(), k)
+    except Exception:
+        market = A.Market()
+    for action in A.company_actions(proj, market):
+        _action_card(action)
 
 
 def render_company(k: float, layout) -> None:

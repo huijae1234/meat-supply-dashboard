@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import company as C
+from lib import public_demo
 from lib import cost as K
 from lib import fx
 from lib import theme
@@ -26,7 +27,7 @@ def _settings_box(saved: C.Settings) -> None:
         draft.fx_alert_pct = float(a.number_input("알림 기준 (30일 변화 %)", 0.1, 50.0, float(saved.fx_alert_pct), 0.5, key="fx_alert"))
         draft.fx_pass = float(b.number_input("전가율 (%)", 0.0, 200.0, float(saved.fx_pass), 5.0, key="fx_pass",
                                              help="환율이 1% 오를 때 수입 원료 원화 단가가 몇 % 오르는지. 계약 조건·재고 회전에 따라 100%보다 작을 수 있습니다."))
-        if st.button("환율 설정 저장", key="fx_save"):
+        if st.button("환율 설정 저장", key="fx_save", disabled=public_demo.enabled()):
             try:
                 C.save_settings(draft)
             except ValueError as exc:

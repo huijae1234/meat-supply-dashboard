@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import company as C
+from lib import public_demo
 from lib import expiry as E
 from lib import planning as P
 from lib import theme
@@ -29,7 +30,7 @@ def _settings_box(saved: C.Settings) -> None:
             draft.shelf[sto] = int(b.number_input(f"{sto} ", 0, 1095, int(saved.shelf[sto]), key=f"exp_shelf_{sto}"))
         c.markdown("**폐기 처리비**")
         draft.disposal_cost = float(c.number_input("원/kg", 0.0, 100000.0, float(saved.disposal_cost), 50.0, key="exp_disposal"))
-        if st.button("소비기한 기준 저장", key="exp_save"):
+        if st.button("소비기한 기준 저장", key="exp_save", disabled=public_demo.enabled()):
             try:
                 C.save_settings(draft)
             except ValueError as exc:
@@ -84,7 +85,7 @@ def render_expiry(k: float, layout) -> None:
     if left.button("샘플(가짜) 데이터로 시험", key="exp_sample", width="stretch"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="exp_saved", width="stretch"):
+    if not public_demo.enabled() and right.button("올려 둔 파일 사용", key="exp_saved", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     settings = UC.get_settings()
