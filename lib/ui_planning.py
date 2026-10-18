@@ -18,7 +18,7 @@ def show_impact(data, compact=False):
         return None
     m = result.metrics()
     cols = st.columns(3)
-    cols[0].metric("원료로 만들 수 있는 양", f"{m['원료기준가능_kg']:,.0f} kg")
+    cols[0].metric("원료·능력으로 만들 수 있는 양" if m.get("능력부족_kg", 0) > 0 else "원료로 만들 수 있는 양", f"{m['원료기준가능_kg']:,.0f} kg")
     cols[1].metric("계획 대비 부족량", f"{m['생산부족_kg']:,.0f} kg")
     cols[2].metric("영향받는 생산계획", f"{m['영향계획건수']}건")
     table = result.orders
@@ -27,7 +27,77 @@ def show_impact(data, compact=False):
     st.dataframe(table, hide_index=True, use_container_width=True)
     st.caption("명시된 계획만 계산합니다. 당일 우선순위(작은 숫자 우선) → 납기 → 원본 행 순서로 원료를 배분합니다. 부족분은 이후 날짜로 자동 이월하지 않습니다.")
     st.caption("납기 위험은 원료 부족 또는 계획일이 납기보다 늦은 경우입니다. 실제 납품 지연일을 예측한 값은 아닙니다. 사용기한이 빠른 로트부터 사용합니다.")
+    if m.get("능력부족_kg", 0) > 0.5:
+        st.caption(f"이 중 라인 하루 능력 때문에 못 만드는 양 {m['능력부족_kg']:,.0f}kg (부족원료 칸의 '생산 능력'). '생산 차질·대응안'에서 앞뒤 작업일로 나눈 안을 볼 수 있습니다.")
     return result
+
+
+def _capacity_settings(data, saved) -> None:
+    from lib import capacity as Q
+    lines_now = ", ".join(f"{k} {v:,.0f}kg" for k, v in saved.line_capacity.items() if v) or "미설정"
+    with st.expander(f"생산 라인·하루 최대 생산량 ({lines_now}, 앞뒤 {saved.shift_days}작업일까지 옮김)"):
+        products = sorted(p for p in set(data.plan["제품"]) if "(대체" not in p)
+        plan_line = data.plan.groupby("제품")["라인"].agg(lambda x: next((v for v in x if str(v) not in ("", "nan", "None")), "")) if "라인" in data.plan else pd.Series(dtype=str)
+        t1 = pd.DataFrame({"제품": products, "라인": [saved.lines.get(p) or plan_line.get(p, "") for p in products]})
+        a, b = st.columns(2)
+        with a:
+            st.markdown("**제품 → 라인**")
+            t1 = st.data_editor(t1, hide_index=True, use_container_width=True, disabled=["제품"], key=f"cap_lines_{P.fingerprint(data)}")
+            if "라인" in data.plan:
+                st.caption("생산계획에 '라인' 열이 있으면 그 값이 이 표보다 우선합니다.")
+        names = sorted({str(v).strip() for v in t1["라인"] if str(v).strip() not in ("", "nan", "None")} | set(saved.line_capacity)
+                       | ({str(v) for v in data.plan["라인"] if str(v) not in ("", "nan", "None")} if "라인" in data.plan else set()))
+        t2 = pd.DataFrame({"라인": names, "하루 최대(kg)": [float(saved.line_capacity.get(n, 0)) for n in names]})
+        with b:
+            st.markdown("**라인 하루 최대 생산량**")
+            t2 = st.data_editor(t2, hide_index=True, use_container_width=True, disabled=["라인"], key=f"cap_caps_{'|'.join(names)}",
+                                column_config={"하루 최대(kg)": st.column_config.NumberColumn(min_value=0.0, step=100.0, format="%,.0f")})
+            st.caption("0이면 제한 없음. 작업일은 '해동 계획'의 투입 요일·휴무일을 함께 씁니다.")
+        shift = st.number_input("넘치는 양을 앞뒤 몇 작업일까지 옮길까요", 0, 14, int(saved.shift_days), key="cap_shift")
+        if st.button("생산 능력 저장 · 모든 계산에 적용", key="cap_save"):
+            draft = copy.deepcopy(saved)
+            draft.lines = {r["제품"]: str(r["라인"]).strip() for _, r in t1.iterrows() if str(r["라인"]).strip() not in ("", "nan", "None")}
+            draft.line_capacity = {r["라인"]: float(r["하루 최대(kg)"] or 0) for _, r in t2.iterrows() if (r["하루 최대(kg)"] or 0) > 0}
+            draft.shift_days = int(shift)
+            try:
+                C.save_settings(draft)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("저장했습니다.")
+                st.rerun()
+
+
+def _capacity_section(data, settings) -> None:
+    from lib import capacity as Q
+    st.markdown("#### 생산 능력")
+    _capacity_settings(data, settings)
+    if not Q.enabled(data, settings):
+        st.caption("라인별 하루 최대 생산량을 정하면 능력을 넘는 날을 찾아 앞뒤 작업일로 나눈 안을 보여 줍니다.")
+        return
+    over = Q.overloads(data, settings)
+    if over.empty:
+        st.success("라인 하루 능력을 넘는 날이 없습니다.")
+        return
+    st.dataframe(pd.DataFrame({"라인": over["라인"], "날짜": over["날짜"].dt.strftime("%m/%d"), "계획량": over["계획량_kg"].map(lambda v: f"{v:,.0f}kg"),
+                               "하루 능력": over["능력_kg"].map(lambda v: f"{v:,.0f}kg"), "넘는 양": over["초과_kg"].map(lambda v: f"{v:,.0f}kg")}),
+                 hide_index=True, use_container_width=True)
+    lv = Q.level(data, settings)
+    if len(lv.moves):
+        st.markdown("**나눈 안** — 납기 안에서 앞당기기를 먼저(그날까지 원료가 들어와 있어야 함), 안 되면 뒤로 미룹니다.")
+        st.dataframe(pd.DataFrame({"원래 날짜": lv.moves["원래날짜"].dt.strftime("%m/%d"), "제품": lv.moves["제품"], "주문번호": lv.moves["주문번호"],
+                                   "옮긴 날짜": lv.moves["옮긴날짜"].dt.strftime("%m/%d"), "물량": lv.moves["물량_kg"].map(lambda v: f"{v:,.0f}kg"),
+                                   "방향": lv.moves["방향"], "납기": lv.moves["납기상태"]}), hide_index=True, use_container_width=True)
+    if len(lv.overflow):
+        st.warning("옮길 곳이 없어 능력을 넘는 날: " + ", ".join(f"{r['날짜']:%m/%d} {r['라인']} {r['초과_kg']:,.0f}kg" for _, r in lv.overflow.iterrows())
+                   + f". 앞뒤 {settings.shift_days}작업일 안에 남은 능력이 없습니다(옮길 범위를 늘리거나 감산·잔업을 검토).")
+    out = lv.plan.copy()
+    for c in ("날짜", "납기"):
+        if c in out:
+            out[c] = pd.to_datetime(out[c]).dt.strftime("%Y-%m-%d")
+    st.download_button("조정된 생산계획 내려받기 (CSV)", out.to_csv(index=False).encode("utf-8-sig"), file_name="생산계획_능력조정.csv", mime="text/csv",
+                       key="cap_download", help="확인 후 '원료 소요·재고'에서 생산계획.csv로 다시 올리면 반영됩니다. 원본은 자동으로 바뀌지 않습니다.")
+    st.caption("이 안은 아래 '자동 대응 후보'의 '생산 능력 맞춰 나누기'로도 비교·편집할 수 있습니다.")
 
 
 def _get_data():
@@ -152,6 +222,7 @@ def render_planning():
         return
     from lib import ui_company as UC
     settings = UC.get_settings()
+    _capacity_section(data, settings)
     seed_data = _auto_candidates(data, settings)
     st.markdown("#### 대응안 입력 · 원본은 그대로 유지됩니다")
     st.caption("입고 앞당기기: 기존 행의 입고예정일 수정 / 긴급 확보: 입고 행 추가 / 생산일 변경: 계획 날짜 수정 / 대체: 배합표에서 원료·투입량 변경. "

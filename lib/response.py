@@ -17,11 +17,12 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from lib import capacity as Q
 from lib import company as C
 from lib import cost as K
 from lib import planning as P
 
-KINDS = ("감산 수용", "대체 원료", "긴급 현물 구매", "생산일 늦추기")
+KINDS = ("감산 수용", "대체 원료", "긴급 현물 구매", "생산일 늦추기", "생산 능력 맞춰 나누기")
 
 
 @dataclass
@@ -251,16 +252,46 @@ def delay_candidate(data: C.CompanyData, base: P.Feasibility, settings: C.Settin
     if stuck:
         notes.append("옮길 날짜가 없는 계획(다음 입고·해동이 없음): " + ", ".join(stuck[:6]) + (" 외" if len(stuck) > 6 else ""))
     cand = P.change_scenario(data, plan=plan)
-    cand.substitute = data.substitute
+    cand.substitute, cand.supplier = data.substitute, data.supplier
+    if Q.enabled(cand, settings):  # 옮긴 날이 라인 능력을 넘으면 앞뒤 작업일로 나눈다
+        lv = Q.level(cand, settings)
+        if len(lv.moves):
+            cand2 = P.change_scenario(cand, plan=lv.plan)
+            cand2.substitute, cand2.supplier = data.substitute, data.supplier
+            cand = cand2
+            notes.append(f"옮긴 날이 라인 능력을 넘어 {len(lv.moves)}건을 앞뒤 작업일로 나눴습니다")
+        if len(lv.overflow):
+            notes.append(f"그래도 능력을 넘는 날 {len(lv.overflow)}일은 '생산 능력' 부족으로 남습니다")
     return Candidate("생산일 늦추기", cand, notes, ["설비·인력 일정과 고객 납기 협의가 필요합니다. 옮긴 날 다른 계획과 원료를 나눠 씁니다"])
+
+
+def capacity_candidate(data: C.CompanyData, base: P.Feasibility, settings: C.Settings | None) -> Candidate | None:
+    """라인 하루 능력을 넘는 계획을 앞뒤 작업일로 나눈다(앞당기기 먼저, 납기 넘김 표시)."""
+    if not Q.enabled(data, settings) or Q.overloads(data, settings).empty:
+        return None
+    lv = Q.level(data, settings)
+    if lv.moves.empty:
+        return None
+    cand = P.change_scenario(data, plan=lv.plan)
+    cand.substitute, cand.supplier = data.substitute, data.supplier
+    notes = [f"{r['원래날짜']:%m/%d} {r['제품']} {r['물량_kg']:,.0f}kg → {r['옮긴날짜']:%m/%d} ({r['방향']}" + (", 납기 넘김)" if r["납기상태"] == "납기 넘김" else ")")
+             for _, r in lv.moves.head(8).iterrows()]
+    if len(lv.moves) > 8:
+        notes.append(f"외 {len(lv.moves) - 8}건")
+    if len(lv.overflow):
+        notes.append("옮길 곳이 없어 능력을 넘는 날: " + ", ".join(f"{r['날짜']:%m/%d} {r['라인']} {r['초과_kg']:,.0f}kg" for _, r in lv.overflow.iterrows()))
+    warns = ["앞당긴 물량은 완제품을 며칠 보관해야 합니다. 설비 점검·인력 일정도 확인하세요"]
+    if (lv.moves["납기상태"] == "납기 넘김").any():
+        warns.append("뒤로 미룬 물량 중 납기를 넘기는 것이 있습니다. 고객 협의가 필요합니다")
+    return Candidate("생산 능력 맞춰 나누기", cand, notes, warns)
 
 
 def candidates(data: C.CompanyData, settings: C.Settings | None = None, today: pd.Timestamp | None = None) -> tuple[P.Feasibility, list[Candidate]]:
     base = P.simulate(data, settings=settings)
     out = [Candidate("감산 수용", data, ["아무것도 바꾸지 않고 못 만드는 양을 그대로 둡니다."], [])]
-    if _shortage(base).empty:
+    if _shortage(base).empty and Q.overloads(data, settings).empty:
         return base, out
-    for make in (substitute_candidate, spot_candidate, delay_candidate):
+    for make in (capacity_candidate, substitute_candidate, spot_candidate, delay_candidate):
         try:
             c = make(data, base, settings, today) if make is spot_candidate else make(data, base, settings)
         except ValueError:

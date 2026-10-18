@@ -25,6 +25,7 @@ class Feasibility:
             "영향계획건수": int((o["부족량_kg"] > 1e-6).sum()),
             "납기위험건수": int(o["납기상태"].eq("위험").sum()),
             "원료부족일수": int(self.materials.loc[self.materials["미충족소요_kg"] > 1e-6, "날짜"].nunique()),
+            "능력부족_kg": float(o["능력부족_kg"].sum()) if "능력부족_kg" in o else 0.0,
             "마지막날사용가능재고_kg": float(self.materials.loc[self.materials["날짜"] == self.materials["날짜"].max(), "사용가능잔량_kg"].sum()),
         }
 
@@ -50,26 +51,40 @@ def simulate(data: C.CompanyData, end_date=None, settings: C.Settings | None = N
     recipes = {}
     for product, group in data.recipe.groupby("제품"):
         recipes[product] = group.groupby(C.MATERIAL_KEY)["투입량_kg"].sum().to_dict()
-    lots = C.material_lots(data, settings)
+    st_ = settings or C.Settings()
+    lots = C.material_lots(data, st_)
     keys = sorted(set(lot["key"] for lot in lots) | {key for rec in recipes.values() for key in rec})
+    has_line = "라인" in plan
     orders, material_days = [], []
     for day in pd.date_range(base + pd.Timedelta(days=1), end):
         wanted, used = {k: 0.0 for k in keys}, {k: 0.0 for k in keys}
+        line_left: dict = {}  # 라인별 그날 남은 생산 능력(kg)
         for _, row in plan[plan["날짜"] == day].iterrows():
             recipe = recipes[row["제품"]]
             quantity = float(row["계획물량_kg"])
             capacity = {key: sum(lot["qty"] for lot in C.available_lots(lots, key, day)) / ratio for key, ratio in recipe.items()}
-            possible = max(0.0, min([quantity, *capacity.values()]))
+            by_material = max(0.0, min([quantity, *capacity.values()]))
             shortages = [C.ingredient_label(*key) for key, cap in capacity.items() if cap + 1e-6 < quantity]
+            line = st_.line_of(row["제품"], row["라인"] if has_line else None)
+            limit = st_.capacity_of(line)
+            possible, cap_short = by_material, 0.0
+            if limit > 0:
+                left = line_left.setdefault(line, limit)
+                possible = min(by_material, left)
+                cap_short = by_material - possible
+                line_left[line] = left - possible
+                if cap_short > 1e-6:
+                    shortages.append(f"생산 능력({line})")
             for key, ratio in recipe.items():
-                wanted[key] += quantity * ratio
+                wanted[key] += (quantity - cap_short) * ratio  # 능력 때문에 못 만든 양은 원료 미충족으로 세지 않는다
                 used[key] += possible * ratio
                 C.take(lots, key, day, possible * ratio)
             due = row["납기"]
             risk = "미입력" if pd.isna(due) else ("위험" if day > due or quantity - possible > 1e-6 else "원료상 충족")
             orders.append({"계획행": int(row["계획행"]), "주문번호": row["주문번호"], "날짜": day, "제품": row["제품"],
                            "납기": due, "우선순위": row["우선순위"], "계획물량_kg": quantity, "생산가능_kg": possible,
-                           "부족량_kg": quantity - possible, "부족원료": ", ".join(shortages), "납기상태": risk})
+                           "부족량_kg": quantity - possible, "부족원료": ", ".join(shortages), "납기상태": risk,
+                           "라인": line or "", "능력부족_kg": cap_short})
         for key in keys:
             material_days.append({"날짜": day, "원료": C.ingredient_label(*key), "계획소요_kg": wanted[key],
                                   "실현가능투입_kg": used[key], "미충족소요_kg": max(0.0, wanted[key] - used[key]),

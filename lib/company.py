@@ -88,7 +88,7 @@ REQUIRED = {
 OPTIONAL = {
     "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률", "단가_USDkg"],
     "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률", "단가_USDkg"],
-    "plan": ["주문번호", "납기", "우선순위", "판매가_원kg", "위약금_원kg"], "recipe": ["보관"],
+    "plan": ["주문번호", "납기", "우선순위", "판매가_원kg", "위약금_원kg", "라인"], "recipe": ["보관"],
     "substitute": ["대체육종", "최대대체비율", "환산계수", "비고"],
     "supplier": ["담당자", "연락처", "최소발주량_kg", "발주단위_kg", "우선순위"],
 }
@@ -455,6 +455,17 @@ class Settings:
     disposal_cost: float = 0.0  # 폐기 처리비(원/kg)
     fx_alert_pct: float = 5.0   # USD 환율이 30일 사이 이 % 이상 움직이면 알림
     fx_pass: float = 100.0      # 환율 변화가 수입 원료 단가에 옮겨지는 비율(%)
+    lines: dict = field(default_factory=dict)          # 제품 -> 생산 라인 (생산계획의 '라인' 열이 있으면 그 값이 우선)
+    line_capacity: dict = field(default_factory=dict)  # 라인 -> 하루 최대 생산량(kg). 없거나 0이면 제한 없음
+    shift_days: int = 3                                # 능력을 넘는 양을 앞뒤 몇 작업일까지 옮길지
+
+    def line_of(self, product: str, row_line=None) -> str | None:
+        if row_line is not None and str(row_line).strip() not in ("", "nan", "None", "<NA>"):
+            return str(row_line).strip()
+        return self.lines.get(product)
+
+    def capacity_of(self, line: str | None) -> float:
+        return float(self.line_capacity.get(line, 0) or 0) if line else 0.0
 
     def can_start(self, day: pd.Timestamp) -> bool:
         """해동실에 넣을 수 있는 날인지 (작업 요일이고 휴무일이 아님)."""
@@ -494,7 +505,8 @@ def load_settings() -> Settings:
                       spot_premium=value.get("spot_premium", DEFAULT_SPOT_PREMIUM), spot_lead=value.get("spot_lead", dict(DEFAULT_SPOT_LEAD)),
                       expiry_warn=value.get("expiry_warn", dict(DEFAULT_EXPIRY_WARN)), shelf=value.get("shelf", dict(DEFAULT_SHELF)),
                       disposal_cost=value.get("disposal_cost", 0.0), fx_alert_pct=value.get("fx_alert_pct", 5.0),
-                      fx_pass=value.get("fx_pass", 100.0))  # 예전 설정 파일에는 해동 값이 없다
+                      fx_pass=value.get("fx_pass", 100.0), lines=value.get("lines", {}), line_capacity=value.get("line_capacity", {}),
+                      shift_days=value.get("shift_days", 3))  # 예전 설정 파일에는 해동 값이 없다
     _validate_settings(result)
     return result
 
@@ -531,6 +543,13 @@ def _validate_settings(settings: Settings) -> None:
     for v, low, high, what in ((settings.fx_alert_pct, 0.1, 50, "환율 알림 기준"), (settings.fx_pass, 0, 200, "환율 전가율")):
         if not isinstance(v, (int, float)) or not math.isfinite(v) or not low <= v <= high:
             raise ValueError(f"{what}은 {low:g}~{high:g}%여야 합니다.")
+    if not isinstance(settings.lines, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not v.strip() for k, v in settings.lines.items()):
+        raise ValueError("제품별 라인 이름을 비우지 말아 주세요.")
+    if not isinstance(settings.line_capacity, dict) or any(not isinstance(k, str) or not k.strip() or not isinstance(v, (int, float))
+                                                           or not math.isfinite(v) or not 0 <= v <= 10_000_000 for k, v in settings.line_capacity.items()):
+        raise ValueError("라인 하루 최대 생산량은 0~10,000,000kg이어야 합니다.")
+    if not isinstance(settings.shift_days, int) or not 0 <= settings.shift_days <= 14:
+        raise ValueError("옮길 수 있는 작업일은 0~14일 정수여야 합니다.")
 
 
 def save_settings(settings: Settings) -> None:
@@ -543,7 +562,8 @@ def save_settings(settings: Settings) -> None:
                                 "thaw_weekdays": sorted(settings.thaw_weekdays), "holidays": sorted(settings.holidays), "thaw_hold": settings.thaw_hold,
                                 "spot_premium": float(settings.spot_premium), "spot_lead": settings.spot_lead,
                                 "expiry_warn": settings.expiry_warn, "shelf": settings.shelf, "disposal_cost": float(settings.disposal_cost),
-                                "fx_alert_pct": float(settings.fx_alert_pct), "fx_pass": float(settings.fx_pass)}, ensure_ascii=False), encoding="utf-8")
+                                "fx_alert_pct": float(settings.fx_alert_pct), "fx_pass": float(settings.fx_pass),
+                                "lines": settings.lines, "line_capacity": settings.line_capacity, "shift_days": settings.shift_days}, ensure_ascii=False), encoding="utf-8")
     temp.replace(target)
 
 
@@ -847,6 +867,7 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
     plan["납기"] = plan["날짜"]
     plan["우선순위"] = 100
     plan["판매가_원kg"] = plan["제품"].map({"프레스햄": 9000, "소시지": 8500, "베이컨": 21000, "육개장": 9000, "양념갈비": 14000})
+    plan["라인"] = plan["제품"].map({"프레스햄": "햄 라인", "소시지": "햄 라인", "베이컨": "베이컨 라인", "육개장": "탕류 라인", "양념갈비": "양념육 라인"})
     # 대체표(설명용): 육개장의 수입 냉동 양지를 국산 냉장 사태로 최대 50%, 프레스햄의 수입 냉동 뒷다리를 국산 냉장 앞다리로 최대 40%
     substitute = pd.DataFrame([
         ["육개장", "소", "양지", "수입", "냉동", "사태", "국산", "냉장", 50, 1.0, "식감 확인 필요"],
