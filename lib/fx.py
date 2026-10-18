@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from datetime import timedelta
 
 import pandas as pd
@@ -30,6 +31,28 @@ class FxError(RuntimeError):
     """인증 오류·한도 마감처럼 더 부르면 안 되는 오류."""
 
 
+def _safe_request_error(exc: Exception, response=None) -> FxError:
+    """외부 오류 본문·요청 주소·인증키를 버리고 사용자용 안내만 반환한다."""
+    status = None
+    for candidate in (response, getattr(exc, "response", None)):
+        try:
+            value = getattr(candidate, "status_code", None)
+        except Exception:
+            value = None
+        if isinstance(value, int):
+            status = value
+            break
+    if status in (401, 403):
+        return FxError("환율 API 인증에 실패했습니다. 서버의 KEY_KOREAEXIM 설정을 확인하세요.")
+    if status == 429:
+        return FxError("환율 API 호출 한도에 도달했습니다. 나중에 다시 시도하세요.")
+    if isinstance(exc, requests.exceptions.Timeout):
+        return FxError("환율 API 응답 시간이 초과됐습니다. 나중에 다시 시도하세요.")
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return FxError("환율 API에 연결하지 못했습니다. 나중에 다시 시도하세요.")
+    return FxError("환율 API 요청 또는 응답 처리 중 오류가 났습니다. 나중에 다시 시도하세요.")
+
+
 def has_key() -> bool:
     return bool(os.environ.get(KEY_ENV))
 
@@ -45,19 +68,25 @@ def fetch(day: pd.Timestamp, session=requests) -> pd.DataFrame:
     """하루치 환율. 빈 목록이면 빈 표(휴일·고시 전)."""
     key = os.environ.get(KEY_ENV, "")
     if not key:
-        raise FxError(f".env 에 {KEY_ENV} 가 없습니다.")
-    r = session.get(URL, params={"authkey": key, "searchdate": f"{day:%Y%m%d}", "data": "AP01"}, timeout=20)
-    r.raise_for_status()
-    rows = r.json() or []
-    codes = {int(x.get("result", 1)) for x in rows}
-    if 3 in codes:
-        raise FxError("환율 API 인증 코드 오류입니다. .env의 KEY_KOREAEXIM을 확인하세요.")
-    if 4 in codes:
-        raise FxError("환율 API 하루 호출 한도가 마감됐습니다. 내일 이어서 받습니다.")
-    if 2 in codes:
-        raise FxError("환율 API 데이터 코드 오류입니다.")
-    return pd.DataFrame([{"date": day.normalize(), "cur_unit": x["cur_unit"], "deal_bas_r": _num(x.get("deal_bas_r"))}
-                         for x in rows if x.get("cur_unit")])
+        raise FxError(f"서버에 {KEY_ENV} 비공개 설정이 없습니다.")
+    r = None
+    try:
+        r = session.get(URL, params={"authkey": key, "searchdate": f"{day:%Y%m%d}", "data": "AP01"}, timeout=20)
+        r.raise_for_status()
+        rows = r.json() or []
+        codes = {int(x.get("result", 1)) for x in rows}
+        if 3 in codes:
+            raise FxError("환율 API 인증 코드 오류입니다. 서버의 KEY_KOREAEXIM 설정을 확인하세요.")
+        if 4 in codes:
+            raise FxError("환율 API 하루 호출 한도가 마감됐습니다. 내일 이어서 받습니다.")
+        if 2 in codes:
+            raise FxError("환율 API 데이터 코드 오류입니다.")
+        return pd.DataFrame([{"date": day.normalize(), "cur_unit": x["cur_unit"], "deal_bas_r": _num(x.get("deal_bas_r"))}
+                             for x in rows if x.get("cur_unit")])
+    except FxError:
+        raise
+    except Exception as exc:
+        raise _safe_request_error(exc, r) from None
 
 
 def _state() -> dict:
@@ -93,8 +122,8 @@ def collect(days_back: int = 180, budget: int = FX_BUDGET, today: pd.Timestamp |
         except FxError as e:
             error = str(e)
             break
-        except Exception as e:  # 네트워크 등 개별 실패: 다음 실행에서 다시
-            error = f"{type(e).__name__}: {e}".replace(os.environ.get(KEY_ENV, "") or "\0", "***")
+        except Exception:  # 알려지지 않은 오류도 외부 원문 없이 안내한다
+            error = "환율 API 처리 중 오류가 났습니다. 나중에 다시 시도하세요."
             break
         calls += 1
         if df.empty:
@@ -104,11 +133,31 @@ def collect(days_back: int = 180, budget: int = FX_BUDGET, today: pd.Timestamp |
         new.append(df)
     if new:
         out = pd.concat([have, *new], ignore_index=True).drop_duplicates(["date", "cur_unit"], keep="last")
-        out.sort_values(["date", "cur_unit"]).to_csv(live.LIVE_DIR / FX_FILE, index=False, date_format="%Y-%m-%d")
+        destination = live.LIVE_DIR / FX_FILE
+        pending = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=live.LIVE_DIR,
+                                             prefix=".fx-", suffix=".csv.tmp", delete=False) as file:
+                pending = file.name
+                out.sort_values(["date", "cur_unit"]).to_csv(file, index=False, date_format="%Y-%m-%d")
+            os.replace(pending, destination)
+        finally:
+            if pending and os.path.exists(pending):
+                os.unlink(pending)
     state["empty"] = sorted(empty)
     state["last"] = {"at": str(pd.Timestamp.now(tz="Asia/Seoul").tz_localize(None).floor("s")), "calls": calls,
                      "new_days": len(new), "error": error, "pending": max(len(todo) - calls, 0) if (stopped or error) else 0}
-    (live.LIVE_DIR / STATE_FILE).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    state_file = live.LIVE_DIR / STATE_FILE
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=live.LIVE_DIR,
+                                         prefix=".fx-state-", suffix=".json.tmp", delete=False) as file:
+            pending = file.name
+            json.dump(state, file, ensure_ascii=False)
+        os.replace(pending, state_file)
+    finally:
+        if pending and os.path.exists(pending):
+            os.unlink(pending)
     return state["last"]
 
 

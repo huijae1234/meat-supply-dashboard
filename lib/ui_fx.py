@@ -60,22 +60,32 @@ def render_fx(k: float, layout) -> None:
     st.subheader("환율")
     st.caption("한국수출입은행 현재환율(매매기준율)을 매일 모읍니다. 수입 원료는 **모두 USD 결제**로 보고, USD 변화를 수입 원료 단가 변화로 옮겨 원가 영향을 계산합니다.")
     if not fx.has_key():
-        st.info("`.env`에 `KEY_KOREAEXIM=발급받은 인증키` 한 줄을 넣고 다시 실행하면 환율을 받을 수 있습니다.")
+        if public_demo.enabled():
+            st.info("현재 서버의 환율 API 연결을 준비 중입니다. 아래에 저장된 공공데이터가 있으면 먼저 보여 드립니다.")
+        else:
+            st.info("`.env`에 `KEY_KOREAEXIM=발급받은 인증키` 한 줄을 넣고 다시 실행하면 환율을 받을 수 있습니다.")
     df = fx.load()
     saved = UC.get_settings()
     _settings_box(saved)
     status = fx.last_status()
     a, b = st.columns([3, 1])
-    a.caption(f"수집: {status.get('at', '아직 없음')} · 호출 {status.get('calls', 0)}건 · 새 날짜 {status.get('new_days', 0)}일"
-              + (f" · 남은 날짜 {status['pending']}일" if status.get("pending") else "")
-              + (f" · 오류: {status['error']}" if status.get("error") else "")
-              + " · 매일 09:00 자동 수집에 함께 받습니다(당일 환율은 오전 11시 무렵 고시).")
-    if b.button("빠진 날짜 받기", key="fx_collect", disabled=not fx.has_key(), width="stretch",
-                help="최근 180일 중 아직 없는 영업일을 받습니다(하루 1,000건 제한, 한 번에 최대 300건)."):
-        with st.spinner("환율을 받는 중..."):
-            r = fx.collect(180)
-        (st.error if r.get("error") else st.success)(f"호출 {r['calls']}건, 새 날짜 {r['new_days']}일" + (f" — {r['error']}" if r.get("error") else ""))
-        df = fx.load()
+    if public_demo.enabled():
+        a.caption("공개 체험판은 서버가 공공 환율을 함께 갱신합니다. "
+                  + (f"마지막 서버 수집: {status['at']}" if status.get("at") else "저장된 자료 기준")
+                  + (" · 최근 수집 실패" if status.get("error") else "")
+                  + " · 당일 환율은 고시 전이면 없을 수 있습니다.")
+        b.caption("방문자별 수집은 막았습니다.")
+    else:
+        a.caption(f"수집: {status.get('at', '아직 없음')} · 호출 {status.get('calls', 0)}건 · 새 날짜 {status.get('new_days', 0)}일"
+                  + (f" · 남은 날짜 {status['pending']}일" if status.get("pending") else "")
+                  + (f" · 오류: {status['error']}" if status.get("error") else "")
+                  + " · 매일 09:00 자동 수집에 함께 받습니다(당일 환율은 오전 11시 무렵 고시).")
+        if b.button("빠진 날짜 받기", key="fx_collect", disabled=not fx.has_key(), width="stretch",
+                    help="최근 180일 중 아직 없는 영업일을 받습니다(하루 1,000건 제한, 한 번에 최대 300건)."):
+            with st.spinner("환율을 받는 중..."):
+                r = fx.collect(180)
+            (st.error if r.get("error") else st.success)(f"호출 {r['calls']}건, 새 날짜 {r['new_days']}일" + (f" — {r['error']}" if r.get("error") else ""))
+            df = fx.load()
     if df.empty:
         st.warning("저장된 환율이 없습니다.")
         return

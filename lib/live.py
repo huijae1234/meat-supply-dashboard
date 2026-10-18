@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import tempfile
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
@@ -43,7 +45,11 @@ class BudgetExceeded(RuntimeError):
 
 
 class ApiError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, safe: bool = False, fatal: bool = False):
+        super().__init__(message)
+        # Only messages composed in this module may be copied to a public log/UI.
+        self.safe = safe
+        self.fatal = fatal
 
 
 # ------------------------------------------------------------------ 상태 / 호출 예산
@@ -63,7 +69,22 @@ def _read_state() -> dict:
 
 
 def _write_state(st: dict) -> None:
-    _state_path().write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+    path = _state_path()
+    content = json.dumps(st, ensure_ascii=False)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", dir=LIVE_DIR,
+            prefix="._state.", suffix=".tmp", delete=False,
+        ) as file:
+            temporary = Path(file.name)
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def calls_today() -> int:
@@ -81,7 +102,7 @@ def has_key() -> bool:
 def _key() -> str:
     k = os.environ.get("KEY_EKAPE_DISTRIB") or os.environ.get("KEY_AT_PRICE") or ""
     if not k:
-        raise ApiError(".env 에 KEY_EKAPE_DISTRIB 가 없습니다.")
+        raise ApiError("축산물 API 키가 설정되지 않았습니다.", safe=True)
     return k  # 이미 URL 인코딩된 키: 그대로 URL 에 붙인다 (requests 가 다시 인코딩하면 인증 실패)
 
 
@@ -89,19 +110,69 @@ def _key() -> str:
 def _call(path: str, **params) -> list[dict]:
     qs = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{BASE}{path}?serviceKey={_key()}&{qs}"
-    last = None
+    last = "알 수 없는 통신 오류"
     for attempt in range(3):
+        response = None
         try:
-            r = requests.get(url, timeout=30)
-            r.raise_for_status()
-            root = ET.fromstring(r.text)
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            root = ET.fromstring(response.text)
             code = (root.findtext("./header/resultCode") or "").strip()
             if code not in ("00", "03"):  # 03 = 데이터 없음
-                raise ApiError(f"{path} {code}: {root.findtext('./header/resultMsg')}")
+                message = (root.findtext("./header/resultMsg") or "").strip()
+                upper_message = message.upper()
+                auth_error = any(word in upper_message for word in (
+                    "서비스키", "인증키", "ACCESS_DENIED", "활용기간", "등록되지 않은", "SERVICE_KEY", "INVALID_KEY", "UNAUTHORIZED"
+                ))
+                limit_error = any(word in upper_message for word in ("요청제한", "RATE_LIMIT", "REQUESTS_EXCEEDS"))
+                if auth_error:
+                    reason = "서비스키 인증 또는 접근 권한 오류"
+                elif limit_error:
+                    reason = "API 요청 제한 오류"
+                else:
+                    reason = "API가 오류를 반환했습니다"
+                safe_code = code if re.fullmatch(r"[0-9]{1,4}", code) else "알 수 없음"
+                raise ApiError(f"API 오류 코드 {safe_code}: {reason}", safe=True, fatal=auth_error or limit_error)
             return [{c.tag: (c.text or "").strip() for c in it} for it in root.iterfind("./body/items/item")]
-        except (requests.RequestException, ET.ParseError) as e:
-            last = e
-    raise ApiError(f"{path} 호출 실패: {last}")
+        except requests.HTTPError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None) or getattr(response, "status_code", None)
+            last = f"HTTP {status} 응답 오류" if isinstance(status, int) and 100 <= status <= 599 else "HTTP 응답 오류"
+            if status in (401, 403, 429):
+                raise ApiError(last, safe=True, fatal=True) from None
+        except requests.Timeout:
+            last = "요청 시간 초과"
+        except requests.ConnectionError:
+            last = "서버 연결 오류"
+        except requests.RequestException:
+            last = "통신 요청 오류"
+        except ET.ParseError:
+            last = "응답 XML 해석 오류"
+    # requests 예외 문자열에는 serviceKey가 들어간 요청 URL이 포함될 수 있다.
+    raise ApiError(f"API 호출 실패: {last}", safe=True) from None
+
+
+def _safe_failure(exc: Exception) -> str:
+    """서버 로그와 화면에는 검증된 오류 문장 또는 오류 유형만 남긴다."""
+    if isinstance(exc, ApiError):
+        if exc.safe:
+            return str(exc)
+        if any(word in str(exc) for word in ("서비스키", "ACCESS_DENIED", "활용기간", "등록되지 않은", "요청제한")):
+            return "API 인증 또는 호출 제한 오류"
+        return "API 처리 오류"
+    if isinstance(exc, requests.HTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return f"HTTP {status} 응답 오류" if isinstance(status, int) and 100 <= status <= 599 else "HTTP 응답 오류"
+    if isinstance(exc, requests.Timeout):
+        return "요청 시간 초과"
+    if isinstance(exc, requests.ConnectionError):
+        return "서버 연결 오류"
+    if isinstance(exc, requests.RequestException):
+        return "통신 요청 오류"
+    if isinstance(exc, ET.ParseError):
+        return "응답 XML 해석 오류"
+    # 다른 예외의 본문에도 API 응답이나 URL이 들어갈 수 있으므로 종류만 표시한다.
+    name = type(exc).__name__
+    return f"처리 오류 ({name})" if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name) else "처리 오류"
 
 
 def _num(v):
@@ -186,7 +257,21 @@ def _upsert(name: str, new: pd.DataFrame) -> None:
     if p.exists():
         new = pd.concat([pd.read_csv(p), new], ignore_index=True)
     new = new.drop_duplicates(subset=SCHEMAS[name], keep="last").sort_values(SCHEMAS[name][0])
-    new.to_csv(p, index=False, encoding="utf-8")
+    # 같은 폴더에 완전히 쓴 뒤 교체해야 동시 접속자가 반쯤 작성된 CSV를 읽지 않는다.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", dir=LIVE_DIR,
+            prefix=f".{name}.", suffix=".tmp", delete=False,
+        ) as file:
+            temporary = Path(file.name)
+            new.to_csv(file, index=False)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, p)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 # ------------------------------------------------------------------ 갱신
@@ -197,8 +282,8 @@ def _months(start: date, end: date):
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
 
 
-def refresh(days_back: int = 60, stock_from: str = "2024-01", progress=None) -> dict:
-    """아직 못 받은 날짜·월만 호출해서 누적 저장. 예산 초과 시 중단하고 여태 받은 것은 보존한다."""
+def refresh(days_back: int = 60, stock_from: str = "2024-01", progress=None, max_calls: int | None = None) -> dict:
+    """아직 못 받은 날짜·월만 호출해서 누적 저장. max_calls는 이번 갱신의 작업 수 상한(재시도 제외)."""
     st = _read_state()
     checked = st["checked"]
     log = {"calls": 0, "new_rows": {}, "errors": [], "stopped_by_budget": False}
@@ -235,24 +320,26 @@ def refresh(days_back: int = 60, stock_from: str = "2024-01", progress=None) -> 
 
     jobs.sort(key=lambda j: j[3], reverse=True)  # 한도에 걸리면 오래된 것부터 포기 (최신 우선)
     room = DAILY_BUDGET - st["calls_today"]
+    if max_calls is not None:
+        room = min(room, max(0, int(max_calls)))
     log["pending"] = 0
     if len(jobs) > room:
         log["pending"] = len(jobs) - max(room, 0)  # 오늘 한도 때문에 못 받은 작업 수 (다음 실행에서 이어서 받는다)
         jobs, log["stopped_by_budget"] = jobs[:max(room, 0)], True
 
-    fatal = {"msg": None}  # 키·권한 오류는 모든 호출이 똑같이 실패하므로 즉시 중단한다
+    fatal = {"found": False}  # 키·권한 오류는 모든 호출이 똑같이 실패하므로 즉시 중단한다
     FATAL_WORDS = ("서비스키", "ACCESS_DENIED", "활용기간", "등록되지 않은", "요청제한")
 
     def run(job):
         api, key, fn, _ = job
-        if fatal["msg"]:
+        if fatal["found"]:
             return api, key, None, SKIPPED
         try:
             return api, key, fn(), None
         except Exception as e:  # 개별 실패는 기록하고 계속
-            if any(w in str(e) for w in FATAL_WORDS):
-                fatal["msg"] = str(e)
-            return api, key, None, f"{api} {key}: {e}"
+            if isinstance(e, ApiError) and (e.fatal or any(w in str(e) for w in FATAL_WORDS)):
+                fatal["found"] = True
+            return api, key, None, f"{api} {key}: {_safe_failure(e)}"
 
     buf: dict[str, list] = {}
     with ThreadPoolExecutor(max_workers=4) as ex:
@@ -284,7 +371,7 @@ def refresh(days_back: int = 60, stock_from: str = "2024-01", progress=None) -> 
     if log["errors"]:
         with open(LIVE_DIR / "_errors.log", "a", encoding="utf-8") as f:
             for e in log["errors"]:
-                f.write(st["last_refresh"] + " | " + e + chr(10))
+                f.write(st["last_refresh"] + " | [safe-v1] " + e + chr(10))
     return log
 
 
@@ -294,7 +381,10 @@ def last_status() -> dict:
 
 def recent_errors(n: int = 10) -> list[str]:
     p = LIVE_DIR / "_errors.log"
-    return p.read_text(encoding="utf-8").strip().splitlines()[-n:] if p.exists() else []
+    if not p.exists():
+        return []
+    # 이전 버전의 로그에는 요청 URL/키가 남아 있을 수 있어 공개 화면에 내보내지 않는다.
+    return [line for line in p.read_text(encoding="utf-8").splitlines() if " | [safe-v1] " in line][-n:]
 
 
 # ------------------------------------------------------------------ 품질 점검

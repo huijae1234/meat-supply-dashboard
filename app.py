@@ -12,6 +12,7 @@ from lib import live_analysis as LA
 from lib import theme
 from lib import ui_company as UC
 from lib import public_demo
+from lib import public_market
 from lib.plain import VERDICT, deviation_word, model_name, vs_normal
 from lib.data import OUTLIER_RATIO, SPECIES_KO, get_source, last_actual_week, load_all
 
@@ -20,7 +21,8 @@ st.set_page_config(page_title="고기가 부족하게 돼지 않겠소?", page_i
 
 if public_demo.enabled():
     st.session_state["co_source"] = "sample"
-    st.info("공개 체험판입니다. 공장 수치는 모두 합성·샘플 데이터이며, 회사 CSV 업로드와 서버 저장은 지원하지 않습니다.")
+    public_market.ensure_public_data()
+    st.info("공개 체험판입니다. 공장 수치는 모두 합성·샘플 데이터이며, 회사 CSV 업로드와 서버 저장은 지원하지 않습니다. 시장·환율 화면은 별도의 공공데이터입니다.")
 
 st.markdown(theme.CSS, unsafe_allow_html=True)
 
@@ -86,6 +88,9 @@ def _live_sig() -> str:
 _ls = live.last_status()
 _bad = bool(_ls and not _ls.get("ok", True))
 _collect = f"실제 수집 실패 {_ls.get('errors', 0)}건" if _bad else f"실제 데이터 수집 {live.last_refresh() or '없음'}"
+if public_demo.enabled():
+    _bad = False
+    _collect = "시장 자료는 공공데이터 참고용"
 st.markdown(
     f'''<div class="hero"><div><h1>🥩🐷🐂 고기가 부족하게 돼지 않겠소?</h1>
 <p>식품 생산계획 연계 원료 수급·차질 대응 대시보드</p></div>
@@ -467,7 +472,7 @@ def page_analysis():
     L = live_data(_live_sig())
     stk9, pdl9, pm9, ab9, ap9 = L["stock"], L["price_daily"], L["price_month"], L["auction_beef"], L["auction_pig"]
     if stk9.empty or pdl9.empty:
-        st.info("실제 데이터가 아직 없습니다. 먼저 수집을 실행하세요: `python collect.py`")
+        st.info("실제 데이터가 아직 없습니다. " + ("공개 데이터 수집 상태를 확인해 주세요." if public_demo.enabled() else "먼저 수집을 실행하세요: `python collect.py`"))
     else:
         kd9, sp9 = KIND[species], sp_ko
         # ---------------- 재고 경보
@@ -592,26 +597,34 @@ def page_live():
     st.subheader("실제 데이터 (축산물품질평가원 OpenAPI)")
     st.caption("'시연 (합성 데이터)' 화면은 합성 CSV이고, 이 화면은 실제 API 데이터입니다. 규모가 달라 서로 비교하지 마세요 "
                "(예: 실제 돼지 재고 약 1.8만 톤, 합성 약 9.2만 톤).")
-    if not live.has_key():
-        st.error("`.env` 에 인증키(KEY_EKAPE_DISTRIB)가 없습니다.")
-        st.stop()
     LD = live_data(_live_sig())
     pdl = LD["price_daily"]
+    if not live.has_key() and not public_demo.enabled():
+        st.error("`.env` 에 인증키(KEY_EKAPE_DISTRIB)가 없습니다.")
+        st.stop()
+    if public_demo.enabled() and pdl.empty:
+        st.info("공공데이터를 아직 불러오지 못했습니다. 잠시 후 다시 확인해 주세요.")
+        st.stop()
     c1, c4 = st.columns([4, 1])
-    c1.markdown(
-        f"**마지막 갱신** {live.last_refresh() or '없음'} · **오늘 API 호출** {live.calls_today()}/{live.DAILY_BUDGET} "
-        f"(개발계정 하루 1,000건 제한) · **가격 데이터** "
-        + (f"{pdl['date'].min():%Y-%m-%d} ~ {pdl['date'].max():%Y-%m-%d}" if len(pdl) else "-"))
-    with c4:
-        if st.button("지금 갱신 (최근 데이터)", width="stretch"):
-            bar = st.progress(0.0, text="API 호출 중...")
-            res = live.refresh(days_back=10, progress=lambda i, n: bar.progress(i / max(n, 1), text=f"{i}/{n}"))
-            bar.empty()
-            live.quality_check()
-            st.cache_data.clear()
-            if res["errors"]:
-                st.warning(f"일부 실패 {len(res['errors'])}건: {res['errors'][0]}")
-            st.rerun()
+    if public_demo.enabled():
+        c1.markdown("**공개 데이터** · **가격 데이터** "
+                    + (f"{pdl['date'].min():%Y-%m-%d} ~ {pdl['date'].max():%Y-%m-%d}" if len(pdl) else "-"))
+        c4.caption("서버가 함께 갱신합니다. 방문자별 수집은 막았습니다.")
+    else:
+        c1.markdown(
+            f"**마지막 갱신** {live.last_refresh() or '없음'} · **오늘 API 호출** {live.calls_today()}/{live.DAILY_BUDGET} "
+            f"(개발계정 하루 1,000건 제한) · **가격 데이터** "
+            + (f"{pdl['date'].min():%Y-%m-%d} ~ {pdl['date'].max():%Y-%m-%d}" if len(pdl) else "-"))
+        with c4:
+            if st.button("지금 갱신 (최근 데이터)", width="stretch"):
+                bar = st.progress(0.0, text="API 호출 중...")
+                res = live.refresh(days_back=10, progress=lambda i, n: bar.progress(i / max(n, 1), text=f"{i}/{n}"))
+                bar.empty()
+                live.quality_check()
+                st.cache_data.clear()
+                if res["errors"]:
+                    st.warning(f"일부 실패 {len(res['errors'])}건: {res['errors'][0]}")
+                st.rerun()
     if pdl.empty:
         st.info("아직 수집된 데이터가 없습니다. 터미널에서 `python -m lib.live 60` 을 실행하거나 위 버튼을 누르세요.")
         st.stop()
@@ -630,8 +643,10 @@ def page_live():
                          hide_index=True, width="stretch")
         else:
             st.write("품질 점검에서 발견된 이상이 없습니다.")
-        if errs:
+        if errs and not public_demo.enabled():
             st.code("\n".join(errs), language=None)
+        elif errs:
+            st.caption("최근 수집 실패가 있습니다. 자세한 오류는 공개 화면에 표시하지 않습니다.")
 
     kd, ki = KIND[species], KIND_IMP[species]
     stk, pm = LD["stock"], LD["price_month"]

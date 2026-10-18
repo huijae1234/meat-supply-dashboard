@@ -1,5 +1,6 @@
 ﻿# 비밀 정보
 .env
+.streamlit/secrets.toml
 data/cache/
 __pycache__/
 .pytest_tmp/

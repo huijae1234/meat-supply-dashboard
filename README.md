@@ -95,6 +95,17 @@
 
 Streamlit Community Cloud에 이 저장소의 `main` 브랜치와 **`public_app.py`**로 배포했습니다. 공개 체험판은 기존 합성 데이터와 날짜별 샘플 공장 데이터로 계산하며, 회사 CSV 업로드·서버 파일 저장·로컬 회사 파일 열람을 차단합니다. 조치 이력과 원가 가정은 접속 세션 동안만 유지됩니다. 실제 회사 자료를 넣지 마세요.
 
+`실제 데이터`와 `환율`은 공장 샘플과 구분된 공공데이터입니다. 공개판은 [키가 없는 공공데이터 스냅샷](data/public_live/README.md)을 기본으로 보여 주고, 아래 비공개 설정이 있으면 서버가 제한된 횟수로 최신 데이터를 받습니다. 방문자에게 API 키나 갱신 버튼을 제공하지 않습니다. Streamlit Cloud의 로컬 저장은 영구 보관되지 않을 수 있으므로, 이 화면은 실시간 시황이 아니라 표시된 날짜 기준의 참고 자료입니다.
+
+배포 관리자만 Streamlit Community Cloud의 **앱 Settings → Secrets**에 아래 두 항목을 최상위 항목으로 입력합니다. 값은 예시이며 실제 키를 README, GitHub, 화면, `.streamlit/secrets.toml`의 추적 파일에 넣지 않습니다. 이미 배포한 앱도 Settings에서 Secrets를 추가·변경할 수 있습니다. [Streamlit 공식 안내](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management)
+
+주의: 축산물품질평가원 API의 [공식 요청주소](https://www.data.go.kr/data/15000577/openapi.do)는 HTTP로 안내됩니다. 이 방식은 **방문자와 GitHub로부터 키를 숨기지만**, 제공기관까지 가는 구간의 암호화까지 보장하지는 않습니다. 해당 기관의 HTTPS 지원 여부를 확인하기 전에는 이 차이를 알고 사용해야 합니다.
+
+```toml
+KEY_EKAPE_DISTRIB = "발급받은_인코딩된_키"
+KEY_KOREAEXIM = "발급받은_환율_API_키"
+```
+
 [공개 체험판 열기](https://meat-supply-dashboard-v7hj4kxyd29zjedcq55mz9.streamlit.app/) · 로컬에서 CSV를 올려 전체 기능을 쓰려면 아래의 기존 `app.py` 실행 방법을 이용하세요.
 
 ### 화면부터 살펴보기
@@ -116,7 +127,7 @@ REM .env의 KEY_EKAPE_DISTRIB에 발급받은 키를 입력합니다.
 run.bat
 ```
 
-API 키는 `.env`에만 두며 Git에 포함하지 않습니다. 수집한 실제 데이터는 `data/live/`, 입력한 공장 CSV는 `data/company/`에 보관하며 두 폴더의 운영 데이터도 Git에서 제외합니다.
+로컬 실행의 API 키는 `.env`, 공개 배포의 API 키는 Streamlit Secrets에만 둡니다. 둘 다 Git에 포함하지 않습니다. 로컬에서 수집한 실제 데이터는 `data/live/`, 입력한 공장 CSV는 `data/company/`에 보관하며 두 폴더의 운영 데이터도 Git에서 제외합니다.
 
 자동 수집 등록·해제, 경보 설정, 문제 해결 등 기존 상세 사용법은 [운영 안내](docs/OPERATIONS.md)에서 볼 수 있습니다.
 

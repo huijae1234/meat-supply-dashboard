@@ -89,6 +89,70 @@ def test_collect_stops_on_auth_error(fxdir):
     assert "인증" in r["error"] and r["calls"] == 0
 
 
+@pytest.mark.parametrize("failure, expected", [
+    ("request", "오류"),
+    ("http", "인증"),
+    ("json", "오류"),
+])
+def test_collect_never_saves_provider_error_or_key(fxdir, failure, expected):
+    private_key = "test-key"
+    raw_error = f"provider response authkey={private_key} https://example.test/api?authkey={private_key}"
+
+    class FaultResponse:
+        status_code = 403 if failure == "http" else 200
+
+        def raise_for_status(self):
+            if failure == "http":
+                raise RuntimeError(raw_error)
+
+        def json(self):
+            raise ValueError(raw_error)
+
+    class FaultSession:
+        def get(self, url, params, timeout):
+            if failure == "request":
+                raise RuntimeError(raw_error)
+            return FaultResponse()
+
+    status = fx.collect(0, today=pd.Timestamp("2026-01-09"), session=FaultSession())
+    persisted = (live.LIVE_DIR / fx.STATE_FILE).read_text(encoding="utf-8")
+    assert expected in status["error"]
+    for forbidden in (private_key, "provider response", "example.test", "authkey="):
+        assert forbidden not in status["error"]
+        assert forbidden not in persisted
+
+
+def test_collect_preserves_previous_csv_if_replace_fails(fxdir, monkeypatch):
+    fx.collect(0, today=pd.Timestamp("2026-01-02"), session=FakeSession({"20260102": 1300.0}))
+    destination = live.LIVE_DIR / fx.FX_FILE
+    previous = destination.read_bytes()
+
+    def fail_replace(source, target):
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(fx.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated write failure"):
+        fx.collect(0, today=pd.Timestamp("2026-01-05"), session=FakeSession({"20260105": 1400.0}))
+    assert destination.read_bytes() == previous
+    assert not list(live.LIVE_DIR.glob(".fx-*.csv.tmp"))
+
+
+def test_collect_preserves_previous_state_if_replace_fails(fxdir, monkeypatch):
+    fx.collect(0, today=pd.Timestamp("2026-01-02"), session=FakeSession({}))
+    destination = live.LIVE_DIR / fx.STATE_FILE
+    previous = destination.read_bytes()
+
+    def fail_replace(source, target):
+        assert fx._state()["last"]["calls"] == 1  # 교체 전에는 이전 상태만 읽힌다
+        raise OSError("simulated state write failure")
+
+    monkeypatch.setattr(fx.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated state write failure"):
+        fx.collect(0, today=pd.Timestamp("2026-01-02"), session=FakeSession({}))
+    assert destination.read_bytes() == previous
+    assert not list(live.LIVE_DIR.glob(".fx-state-*.json.tmp"))
+
+
 def test_change_and_latest(fxdir):
     fx.collect(60, today=pd.Timestamp("2026-03-01"), session=FakeSession(_rates(days=60, step=1.0)))
     day, rate = fx.latest()
