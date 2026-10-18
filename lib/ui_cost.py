@@ -35,8 +35,9 @@ def _assumption_editor(data: C.CompanyData, prices: pd.DataFrame, basis: str, ma
     ver = st.session_state.setdefault("cost_ver", 0)
     saved: dict = st.session_state.setdefault("cost_pct", {})
     source = st.radio("자동 채우기 기준", list(K.SOURCES), format_func=K.SOURCES.get, horizontal=True, key="cost_source",
-                      help="경락가는 도매시장 가격이라 소비자가보다 매입가 흐름에 가깝습니다. 다만 국산만 있고, 돼지는 제주 도체 평균 하나뿐입니다.")
-    mk = K.source_changes(data, market, source)
+                      help="경락가(국산)는 도매시장 가격이라 소비자가보다 매입가 흐름에 가깝습니다(돼지는 제주 도체 평균 하나뿐). 환율(수입)은 USD 매매기준율 30일 변화 × 전가율을 수입 원료 단가 변화로 봅니다.")
+    from lib import ui_company as UC
+    mk = K.source_changes(data, market, source, UC.get_settings())
     price = K.unit_price(prices, basis)
     used = sorted(set(K.components(data)["원료"]))
     rows = [{"원료": n, "기준 단가(원/kg)": price.get(n, (math.nan, ""))[0],
@@ -97,23 +98,26 @@ def today_summary(data: C.CompanyData) -> None:
     """'오늘의 생산 위험'용 한 줄: 계획 기간 원료비와, 경락가 최근 30일 흐름이 이어질 때의 변화."""
     if not K.has_prices(data):
         return
-    chg = {n: v for n, (v, _) in K.auction_changes(data).items()}
     from lib import ui_company as UC
-    prod = K.product_costs(data, "avg", chg, UC.get_settings())
+    settings = UC.get_settings()
+    fxc = K.fx_changes(data, settings)
+    chg = {n: v for n, (v, _) in {**K.auction_changes(data), **fxc}.items()}
+    prod = K.product_costs(data, "avg", chg, settings)
     ok = prod[prod["단가없는원료"] == ""]
     if not len(ok):
         return
     cur, new = float(ok["계획원료비"].sum()), float(ok["가정계획원료비"].sum())
     parts = [f"계획 기간 원료비 **{won_big(cur)}**"]
     if chg and abs(new - cur) >= 1:
-        parts.append(f"국산 원료 경락가 최근 30일 흐름이 매입가에 그대로 붙으면 **{'+' if new > cur else ''}{won_big(new - cur)}** ({_pct((new / cur - 1) * 100)})")
+        what = "국산 경락가" + (f"·수입 USD 환율({next(iter(fxc.values()))[1].split(') ')[1].split(' ×')[0]})" if fxc else "")
+        parts.append(f"{what} 최근 30일 흐름이 매입가에 그대로 붙으면 **{'+' if new > cur else ''}{won_big(new - cur)}** ({_pct((new / cur - 1) * 100)})")
         s = ok[ok["판매가_원kg"].notna()]
         sales = float((s["판매가_원kg"] * s["계획물량_kg"]).sum())
         if sales:
             parts.append(f"원료비율 {_ratio(float(s['계획원료비'].sum()) / sales * 100)} → {_ratio(float(s['가정계획원료비'].sum()) / sales * 100)}")
     with st.container(border=True):
         st.markdown("**원가** · " + " · ".join(parts))
-        st.caption("가정 계산입니다(경락가는 매입가가 아님, 수입 원료는 변화 0%로 둠). 원료별 가정 조정은 '원가 영향' 화면에서 합니다." +
+        st.caption("가정 계산입니다(경락가는 매입가가 아님. 수입 원료는 USD 환율 변화" + ("" if fxc else "가 없어 0%로 둠") + "). 원료별 가정 조정은 '원가 영향' 화면에서 합니다." +
                    (" 단가가 없는 원료가 들어간 제품은 합계에서 뺐습니다." if len(ok) < len(prod) else ""))
 
 

@@ -774,6 +774,7 @@ from lib.ui_cost import render_cost
 from lib.ui_thaw import render_thaw
 from lib.ui_orders import render_orders
 from lib.ui_expiry import render_expiry
+from lib.ui_fx import render_fx
 
 
 def page_cost():
@@ -792,6 +793,10 @@ def page_expiry():
     render_expiry(k, layout)
 
 
+def page_fx():
+    render_fx(k, layout)
+
+
 from lib import nav
 
 nav.PAGES["planning"] = st.Page(render_planning, title="생산 차질·대응안", url_path="planning")
@@ -805,7 +810,8 @@ _nav = st.navigation({
                  st.Page(page_orders, title="현장 지시서", url_path="orders"),
                  st.Page(render_worklog, title="조치 이력", url_path="worklog")],
     "시장 참고": [st.Page(page_live, title="실제 데이터", url_path="live"),
-                 st.Page(page_analysis, title="실제 분석·예측", url_path="analysis")],
+                 st.Page(page_analysis, title="실제 분석·예측", url_path="analysis"),
+                 st.Page(page_fx, title="환율", url_path="fx")],
     "분석 과정 (합성·보조)": [st.Page(page_syn_status, title="현황·경보", url_path="demo-status"),
                       st.Page(page_syn_trend, title="수급 추이·예측", url_path="demo-trend"),
                       st.Page(page_syn_season, title="계절성·이상치", url_path="demo-season"),

@@ -86,14 +86,14 @@ REQUIRED = {
     "supplier": ["육종", "부위", "원산지", "보관", "공급처"],
 }
 OPTIONAL = {
-    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률"],
-    "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률"],
+    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률", "단가_USDkg"],
+    "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률", "단가_USDkg"],
     "plan": ["주문번호", "납기", "우선순위", "판매가_원kg", "위약금_원kg"], "recipe": ["보관"],
     "substitute": ["대체육종", "최대대체비율", "환산계수", "비고"],
     "supplier": ["담당자", "연락처", "최소발주량_kg", "발주단위_kg", "우선순위"],
 }
-MONEY_COLUMNS = ("단가_원kg", "판매가_원kg", "위약금_원kg")  # 원/kg. 비어 있어도 되지만, 적었으면 0보다 큰 숫자여야 한다
-COLUMN_ALIASES = {"단가": "단가_원kg", "매입단가": "단가_원kg", "단가원": "단가_원kg", "단가원/kg": "단가_원kg",
+MONEY_COLUMNS = ("단가_원kg", "판매가_원kg", "위약금_원kg", "단가_USDkg")  # 원/kg. 비어 있어도 되지만, 적었으면 0보다 큰 숫자여야 한다
+COLUMN_ALIASES = {"외화단가": "단가_USDkg", "USD단가": "단가_USDkg", "달러단가": "단가_USDkg", "단가USD": "단가_USDkg", "단가": "단가_원kg", "매입단가": "단가_원kg", "단가원": "단가_원kg", "단가원/kg": "단가_원kg",
                   "판매가": "판매가_원kg", "납품가": "판매가_원kg", "판매가원": "판매가_원kg", "판매가원/kg": "판매가_원kg"}
 MATERIAL_KEY = ["육종", "부위", "원산지", "보관"]
 NEEDED_FOR_CALC = ("inventory", "plan", "recipe")  # 입고 예정은 없어도 계산한다
@@ -343,8 +343,29 @@ def load_data(raw_tables: dict[str, pd.DataFrame | None]) -> CompanyData:
             continue
         setattr(data, kind, clean_table(kind, raw, data.issues))
     _resolve_storage(data)
+    _apply_fx(data)
     _cross_check(data)
     return data
+
+
+def _apply_fx(data: CompanyData) -> None:
+    """단가_원kg가 비어 있고 단가_USDkg가 있는 행은 가장 최근 USD 매매기준율(data/live/fx.csv)로 원화 단가를 채운다."""
+    rows = [(k, df) for k in ("inventory", "inbound") if (df := getattr(data, k)) is not None and "단가_USDkg" in df and df["단가_USDkg"].notna().any()]
+    if not rows:
+        return
+    from lib import fx
+    day, rate = fx.latest()
+    for kind, df in rows:
+        if "단가_원kg" not in df:
+            df["단가_원kg"] = math.nan
+        need = df["단가_원kg"].isna() & df["단가_USDkg"].notna()
+        if not need.any():
+            continue
+        if day is None:
+            data.issues.append(Issue("경고", FILE_LABELS[kind], f"환율 데이터가 없어 외화 단가 {int(need.sum())}행을 원화로 바꾸지 못했습니다('환율' 화면에서 받기)."))
+            continue
+        df.loc[need, "단가_원kg"] = df.loc[need, "단가_USDkg"] * rate
+        data.issues.append(Issue("참고", FILE_LABELS[kind], f"외화 단가 {int(need.sum())}행을 USD {rate:,.2f}원({day:%m/%d} 매매기준율)으로 원화 환산했습니다."))
 
 
 def _resolve_storage(data: CompanyData) -> None:
@@ -432,6 +453,8 @@ class Settings:
     expiry_warn: dict = field(default_factory=lambda: dict(DEFAULT_EXPIRY_WARN))
     shelf: dict = field(default_factory=lambda: dict(DEFAULT_SHELF))
     disposal_cost: float = 0.0  # 폐기 처리비(원/kg)
+    fx_alert_pct: float = 5.0   # USD 환율이 30일 사이 이 % 이상 움직이면 알림
+    fx_pass: float = 100.0      # 환율 변화가 수입 원료 단가에 옮겨지는 비율(%)
 
     def can_start(self, day: pd.Timestamp) -> bool:
         """해동실에 넣을 수 있는 날인지 (작업 요일이고 휴무일이 아님)."""
@@ -470,7 +493,8 @@ def load_settings() -> Settings:
                       holidays=value.get("holidays", []), thaw_hold=value.get("thaw_hold", DEFAULT_THAW_HOLD),
                       spot_premium=value.get("spot_premium", DEFAULT_SPOT_PREMIUM), spot_lead=value.get("spot_lead", dict(DEFAULT_SPOT_LEAD)),
                       expiry_warn=value.get("expiry_warn", dict(DEFAULT_EXPIRY_WARN)), shelf=value.get("shelf", dict(DEFAULT_SHELF)),
-                      disposal_cost=value.get("disposal_cost", 0.0))  # 예전 설정 파일에는 해동 값이 없다
+                      disposal_cost=value.get("disposal_cost", 0.0), fx_alert_pct=value.get("fx_alert_pct", 5.0),
+                      fx_pass=value.get("fx_pass", 100.0))  # 예전 설정 파일에는 해동 값이 없다
     _validate_settings(result)
     return result
 
@@ -504,6 +528,9 @@ def _validate_settings(settings: Settings) -> None:
             raise ValueError(f"{what}은 0~{high}일 정수여야 합니다.")
     if not isinstance(settings.disposal_cost, (int, float)) or not math.isfinite(settings.disposal_cost) or not 0 <= settings.disposal_cost <= 100000:
         raise ValueError("폐기 처리비는 0~100,000원/kg이어야 합니다.")
+    for v, low, high, what in ((settings.fx_alert_pct, 0.1, 50, "환율 알림 기준"), (settings.fx_pass, 0, 200, "환율 전가율")):
+        if not isinstance(v, (int, float)) or not math.isfinite(v) or not low <= v <= high:
+            raise ValueError(f"{what}은 {low:g}~{high:g}%여야 합니다.")
 
 
 def save_settings(settings: Settings) -> None:
@@ -515,7 +542,8 @@ def save_settings(settings: Settings) -> None:
                                 "thaw_days": settings.thaw_days, "thaw_loss": settings.thaw_loss, "thaw_capacity": int(settings.thaw_capacity),
                                 "thaw_weekdays": sorted(settings.thaw_weekdays), "holidays": sorted(settings.holidays), "thaw_hold": settings.thaw_hold,
                                 "spot_premium": float(settings.spot_premium), "spot_lead": settings.spot_lead,
-                                "expiry_warn": settings.expiry_warn, "shelf": settings.shelf, "disposal_cost": float(settings.disposal_cost)}, ensure_ascii=False), encoding="utf-8")
+                                "expiry_warn": settings.expiry_warn, "shelf": settings.shelf, "disposal_cost": float(settings.disposal_cost),
+                                "fx_alert_pct": float(settings.fx_alert_pct), "fx_pass": float(settings.fx_pass)}, ensure_ascii=False), encoding="utf-8")
     temp.replace(target)
 
 

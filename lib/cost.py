@@ -144,12 +144,49 @@ def auction_changes(data: C.CompanyData, beef: pd.DataFrame | None = None, pig: 
     return out
 
 
-SOURCES = {"auction": "경락가 (도매시장, 국산만)", "consumer": "소비자가 (소매)"}
+def fx_changes(data: C.CompanyData, settings: C.Settings | None = None, days: int = 30) -> dict[str, tuple[float, str]]:
+    """수입 원료 -> (USD 환율 days일 변화율 × 전가율, 근거). 수입 원료는 모두 USD 결제로 본다."""
+    from lib import fx
+    st_ = settings or C.Settings()
+    chg = fx.change("USD", days)
+    day, rate = fx.latest("USD")
+    if math.isnan(chg):
+        return {}
+    pct = round(chg * st_.fx_pass / 100, 2)
+    why = f"USD {rate:,.1f}원({day:%m/%d}) {days}일 {chg:+.1f}%" + (f" × 전가 {st_.fx_pass:.0f}%" if st_.fx_pass != 100 else "")
+    return {C.ingredient_label(*k): (pct, why) for k in data.recipe[C.MATERIAL_KEY].drop_duplicates().itertuples(index=False, name=None) if k[2] == "수입"}
 
 
-def source_changes(data: C.CompanyData, market: A.Market, source: str) -> dict[str, tuple[float, str]]:
+def fx_scenarios(data: C.CompanyData, settings: C.Settings | None = None, moves=(-10.0, -5.0, 5.0, 10.0)) -> pd.DataFrame:
+    """USD가 move% 움직이면: 수입 원료 단가 = move × 전가율, 계획 기간 원료비·원료비율 변화. 국산 원료는 그대로."""
+    st_ = settings or C.Settings()
+    imports = [C.ingredient_label(*k) for k in data.recipe[C.MATERIAL_KEY].drop_duplicates().itertuples(index=False, name=None) if k[2] == "수입"]
+    rows = []
+    for m in moves:
+        pct = m * st_.fx_pass / 100
+        prod = product_costs(data, "avg", {n: pct for n in imports}, settings)
+        ok = prod[prod["단가없는원료"] == ""]
+        cur, new = float(ok["계획원료비"].sum()), float(ok["가정계획원료비"].sum())
+        s = ok[ok["판매가_원kg"].notna()]
+        sales = float((s["판매가_원kg"] * s["계획물량_kg"]).sum())
+        worst = ok.loc[ok["변화율"].abs().idxmax()] if len(ok) and ok["변화율"].abs().max() > 0 else None
+        rows.append({"USD 변화": m, "수입 원료 단가": pct, "계획 기간 원료비 변화": new - cur, "원료비 변화율": (new / cur - 1) * 100 if cur else math.nan,
+                     "원료비율 전": float(s["계획원료비"].sum()) / sales * 100 if sales else math.nan,
+                     "원료비율 후": float(s["가정계획원료비"].sum()) / sales * 100 if sales else math.nan,
+                     "가장 크게 오르는 제품": f"{worst['제품']} {worst['변화율']:+.1f}%" if worst is not None else "-"})
+    return pd.DataFrame(rows)
+
+
+SOURCES = {"auction+fx": "경락가(국산) + 환율(수입)", "auction": "경락가 (도매시장, 국산만)", "fx": "환율 (수입 원료, USD)", "consumer": "소비자가 (소매)"}
+
+
+def source_changes(data: C.CompanyData, market: A.Market, source: str, settings: C.Settings | None = None) -> dict[str, tuple[float, str]]:
     if source == "auction":
         return auction_changes(data)
+    if source == "fx":
+        return fx_changes(data, settings)
+    if source == "auction+fx":
+        return {**auction_changes(data), **fx_changes(data, settings)}
     return market_changes(data, market) if market.available else {}
 
 

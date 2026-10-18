@@ -83,6 +83,27 @@ def find_alerts(cfg: dict) -> list[dict]:
             out.append({"rule": "quality", "level": "주의", "key": f"quality:{q['table']}:{_h(q['when'], q['detail'])}",
                         "message": f"데이터 품질: {q['detail']} ({q['when']})"})
 
+    # 환율: USD가 30일 사이 기준(설정) 이상 움직이면. 올린 공장 파일이 있으면 수입 원료 원료비 영향도 붙인다
+    try:
+        from lib import fx as FX, cost as CS
+        chg, (day, rate) = FX.change("USD"), FX.latest("USD")
+        st_ = CO.load_settings()
+        if day is not None and chg == chg and abs(chg) >= st_.fx_alert_pct:
+            extra = ""
+            saved_fx = CO.load_saved()
+            if any(v is not None for v in saved_fx.values()):
+                d_fx = CO.load_data(saved_fx)
+                if d_fx.ready() and CS.has_prices(d_fx):
+                    pc = CS.product_costs(d_fx, "avg", {k: v for k, (v, _) in CS.fx_changes(d_fx, st_).items()}, st_)
+                    ok = pc[pc["단가없는원료"] == ""]
+                    diff = float((ok["가정계획원료비"] - ok["계획원료비"]).sum())
+                    if abs(diff) >= 1:
+                        extra = f" · 수입 원료 계획 기간 원료비 {diff:+,.0f}원"
+            out.append({"rule": "fx", "level": "주의", "key": f"fx:USD:{day:%Y-%m-%d}:{'up' if chg > 0 else 'down'}",
+                        "message": f"환율 · USD {rate:,.1f}원({day:%m/%d}), 30일 {chg:+.1f}%{extra}"})
+    except Exception:
+        pass
+
     # 우리 공장: 올려 둔 CSV가 있을 때만 (샘플 데이터는 알리지 않는다). 기본값(안전재고·리드타임)은 코드 기본값을 쓴다.
     try:
         saved = CO.load_saved()
