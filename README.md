@@ -7,7 +7,7 @@
 
 `Python` · `Streamlit` · `pandas · Plotly` · `공공데이터 API` · `시계열 분석`
 
-[화면과 기능](#화면으로-보는-핵심-기능) · [설계 의도](#설계에서-고민한-점) · [실행 방법](#실행-방법) · [분석 노트](docs/ANALYSIS_NOTES.md)
+[브라우저에서 체험하기](https://meat-supply-dashboard-v7hj4kxyd29zjedcq55mz9.streamlit.app/) · [화면과 기능](#화면으로-보는-핵심-기능) · [설계 의도](#설계에서-고민한-점) · [실행 방법](#실행-방법) · [분석 노트](docs/ANALYSIS_NOTES.md)
 
 </div>
 
@@ -93,9 +93,9 @@
 
 ### 공개 샘플 체험판 배포
 
-Streamlit Community Cloud에서 이 저장소의 `main` 브랜치와 **`public_app.py`**를 선택합니다. 공개 체험판은 기존 합성 데이터와 날짜별 샘플 공장 데이터로 계산하며, 회사 CSV 업로드·서버 파일 저장·로컬 회사 파일 열람을 차단합니다. 조치 이력과 원가 가정은 접속 세션 동안만 유지됩니다. 실제 회사 자료를 넣지 마세요.
+Streamlit Community Cloud에 이 저장소의 `main` 브랜치와 **`public_app.py`**로 배포했습니다. 공개 체험판은 기존 합성 데이터와 날짜별 샘플 공장 데이터로 계산하며, 회사 CSV 업로드·서버 파일 저장·로컬 회사 파일 열람을 차단합니다. 조치 이력과 원가 가정은 접속 세션 동안만 유지됩니다. 실제 회사 자료를 넣지 마세요.
 
-배포 주소가 발급되면 README 첫 화면에 실행 링크를 추가합니다. 로컬에서 CSV를 올려 전체 기능을 쓰려면 아래의 기존 `app.py` 실행 방법을 이용하세요.
+[공개 체험판 열기](https://meat-supply-dashboard-v7hj4kxyd29zjedcq55mz9.streamlit.app/) · 로컬에서 CSV를 올려 전체 기능을 쓰려면 아래의 기존 `app.py` 실행 방법을 이용하세요.
 
 ### 화면부터 살펴보기
 
