@@ -38,6 +38,8 @@ DEFAULT_THAW_WEEKDAYS = [0, 1, 2, 3, 4]         # 해동실에 넣을 수 있는
 DEFAULT_THAW_HOLD = 2                            # 해동이 끝난 뒤 쓰기 전까지 냉장 대기 최대 일수 (설명용 초기값)
 DEFAULT_SPOT_PREMIUM = 15.0                      # 긴급 현물 구매 단가 할증(%) (설명용 초기값)
 DEFAULT_SPOT_LEAD = {"국산": 1, "수입": 3}        # 긴급 현물이 들어오기까지 일수 (수입은 국내 재고 보유처 기준)
+DEFAULT_EXPIRY_WARN = {"냉장": 3, "냉동": 30}      # 사용기한까지 이 일수 이내면 '임박'
+DEFAULT_SHELF = {"냉장": 10, "냉동": 365}          # 사용기한을 안 적은 로트의 가정 기한(들어온 날부터, 재고는 기준일부터) — 경고에만 쓴다
 
 # 부위 목록: 현장 부위명 -> 시장 데이터 연결 키 (stock = 부위별 재고의 부위명, price = 소비자가 품목명)
 PARTS = {
@@ -427,6 +429,9 @@ class Settings:
     thaw_hold: int = DEFAULT_THAW_HOLD
     spot_premium: float = DEFAULT_SPOT_PREMIUM
     spot_lead: dict = field(default_factory=lambda: dict(DEFAULT_SPOT_LEAD))
+    expiry_warn: dict = field(default_factory=lambda: dict(DEFAULT_EXPIRY_WARN))
+    shelf: dict = field(default_factory=lambda: dict(DEFAULT_SHELF))
+    disposal_cost: float = 0.0  # 폐기 처리비(원/kg)
 
     def can_start(self, day: pd.Timestamp) -> bool:
         """해동실에 넣을 수 있는 날인지 (작업 요일이고 휴무일이 아님)."""
@@ -463,7 +468,9 @@ def load_settings() -> Settings:
                       thaw_days=value.get("thaw_days", dict(DEFAULT_THAW_DAYS)), thaw_loss=value.get("thaw_loss", dict(DEFAULT_THAW_LOSS)),
                       thaw_capacity=value.get("thaw_capacity", 0), thaw_weekdays=value.get("thaw_weekdays", list(DEFAULT_THAW_WEEKDAYS)),
                       holidays=value.get("holidays", []), thaw_hold=value.get("thaw_hold", DEFAULT_THAW_HOLD),
-                      spot_premium=value.get("spot_premium", DEFAULT_SPOT_PREMIUM), spot_lead=value.get("spot_lead", dict(DEFAULT_SPOT_LEAD)))  # 예전 설정 파일에는 해동 값이 없다
+                      spot_premium=value.get("spot_premium", DEFAULT_SPOT_PREMIUM), spot_lead=value.get("spot_lead", dict(DEFAULT_SPOT_LEAD)),
+                      expiry_warn=value.get("expiry_warn", dict(DEFAULT_EXPIRY_WARN)), shelf=value.get("shelf", dict(DEFAULT_SHELF)),
+                      disposal_cost=value.get("disposal_cost", 0.0))  # 예전 설정 파일에는 해동 값이 없다
     _validate_settings(result)
     return result
 
@@ -492,6 +499,11 @@ def _validate_settings(settings: Settings) -> None:
         raise ValueError("긴급 현물 할증은 0~200%여야 합니다.")
     if set(settings.spot_lead) != set(DEFAULT_SPOT_LEAD) or any(not isinstance(v, int) or not 0 <= v <= 30 for v in settings.spot_lead.values()):
         raise ValueError("긴급 현물 도착 일수는 0~30 정수여야 합니다.")
+    for values, defaults, high, what in ((settings.expiry_warn, DEFAULT_EXPIRY_WARN, 365, "임박 기준"), (settings.shelf, DEFAULT_SHELF, 1095, "가정 기한")):
+        if set(values) != set(defaults) or any(not isinstance(v, int) or not 0 <= v <= high for v in values.values()):
+            raise ValueError(f"{what}은 0~{high}일 정수여야 합니다.")
+    if not isinstance(settings.disposal_cost, (int, float)) or not math.isfinite(settings.disposal_cost) or not 0 <= settings.disposal_cost <= 100000:
+        raise ValueError("폐기 처리비는 0~100,000원/kg이어야 합니다.")
 
 
 def save_settings(settings: Settings) -> None:
@@ -502,7 +514,8 @@ def save_settings(settings: Settings) -> None:
     temp.write_text(json.dumps({"safety": {"/".join(k): v for k, v in settings.safety.items()}, "lead": settings.lead, "cycle": settings.cycle,
                                 "thaw_days": settings.thaw_days, "thaw_loss": settings.thaw_loss, "thaw_capacity": int(settings.thaw_capacity),
                                 "thaw_weekdays": sorted(settings.thaw_weekdays), "holidays": sorted(settings.holidays), "thaw_hold": settings.thaw_hold,
-                                "spot_premium": float(settings.spot_premium), "spot_lead": settings.spot_lead}, ensure_ascii=False), encoding="utf-8")
+                                "spot_premium": float(settings.spot_premium), "spot_lead": settings.spot_lead,
+                                "expiry_warn": settings.expiry_warn, "shelf": settings.shelf, "disposal_cost": float(settings.disposal_cost)}, ensure_ascii=False), encoding="utf-8")
     temp.replace(target)
 
 
@@ -567,8 +580,12 @@ def material_lots(data: CompanyData, settings: Settings | None = None) -> list[d
             key = tuple(r[c] for c in MATERIAL_KEY)
             thaw_days, loss = lot_thaw(r, key[2], key[3], st_)
             explicit = pd.notna(r["사용가능일"])
+            expires = r["사용기한"]
             if explicit:
                 ready = max(arrival, r["사용가능일"])
+                if thaw_days:  # 이미 해동 중인 냉동 로트는 해동 후 보관 한도 안에 써야 한다
+                    hold_end = ready + pd.Timedelta(days=int(st_.thaw_hold))
+                    expires = hold_end if pd.isna(expires) else min(pd.Timestamp(expires), hold_end)
             elif thaw_days:
                 start = st_.next_start(arrival)  # 휴무일·주말에는 해동실에 넣지 않는다
                 ready = (start + pd.Timedelta(days=thaw_days)) if start is not None else pd.Timestamp.max
@@ -576,8 +593,9 @@ def material_lots(data: CompanyData, settings: Settings | None = None) -> list[d
                 ready = arrival
             lots.append({"key": key, "id": str(r.get("로트", f"{kind}-{i}")),
                          "qty": float(r[qty]) * (1 - loss / 100), "frozen_qty": float(r[qty]), "ready": ready, "arrival": arrival,
-                         "expires": r["사용기한"], "status": r["사용상태"], "kind": kind,
-                         "thaw_days": thaw_days, "loss": loss, "explicit_ready": bool(explicit)})
+                         "expires": expires, "status": r["사용상태"], "kind": kind,
+                         "thaw_days": thaw_days, "loss": loss, "explicit_ready": bool(explicit),
+                         "price": float(r["단가_원kg"]) if "단가_원kg" in r and pd.notna(r["단가_원kg"]) else math.nan})
     return lots
 
 
@@ -791,7 +809,9 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
         frame["사용가능일"] = d(1) if kind == "ST" else frame["입고예정일"]
         frame.loc[frame["보관"] == "냉동", "사용가능일"] = None  # 냉동은 해동일수로 계산
         frame["사용기한"] = d(60)
+        frame.loc[frame["보관"] == "냉동", "사용기한"] = d(365)  # 냉동은 기한이 길다
     inventory.loc[inventory["로트"].isin(["ST-003", "ST-005"]), "사용가능일"] = d(1)  # 뒷다리 6톤·양지는 이미 해동 중
+    inventory.loc[inventory["로트"] == "ST-007", "사용기한"] = d(20)  # 사태: 계획 뒤 평균 사용량으로는 기한까지 다 못 쓰는 예시
     # 단가·판매가도 설명용 가짜 값이다 (원/kg)
     inventory["단가_원kg"] = [5500, 13000, 4200, 4200, 9500, 9000, 17000]
     inbound["단가_원kg"] = [5900, 10200]

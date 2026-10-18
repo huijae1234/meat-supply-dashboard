@@ -95,6 +95,13 @@ def find_alerts(cfg: dict) -> list[dict]:
                 if not proj.actionable:
                     out.append({"rule": "company", "level": "주의", "key": f"company-stale:{proj.base_date:%Y-%m-%d}",
                                 "message": "우리 공장 · 재고 데이터 갱신 필요. 발주 권고를 중단했습니다."})
+                if proj.actionable:  # 소비기한: 계획대로 써도 기한까지 다 못 쓰는 로트
+                    from lib import expiry as EX
+                    for _, w in EX.analyze(data, CO.load_settings(), CO.today_kst()).waste.iterrows():
+                        out.append({"rule": "company", "level": "주의",
+                                    "key": f"company-expiry:{w['원료']}:{w['로트']}:{pd.Timestamp(w['유효기한']):%Y-%m-%d}",
+                                    "message": f"우리 공장 · {w['원료']} 로트 {w['로트']}: {pd.Timestamp(w['유효기한']):%m/%d} 기한까지 "
+                                               f"{w['폐기예상_kg']:,.0f}kg 남을 예정(폐기 위험)"})
                 for _, r in proj.summary.iterrows():
                     if r["상태"] in ("긴급", "발주필요"):
                         deadline = r["발주기한"] if r["발주기한"] is not None and not pd.isna(r["발주기한"]) else r["소진예정일"]

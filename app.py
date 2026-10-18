@@ -773,6 +773,7 @@ from lib.ui_planning import render_planning, render_worklog
 from lib.ui_cost import render_cost
 from lib.ui_thaw import render_thaw
 from lib.ui_orders import render_orders
+from lib.ui_expiry import render_expiry
 
 
 def page_cost():
@@ -787,6 +788,10 @@ def page_orders():
     render_orders(k, layout)
 
 
+def page_expiry():
+    render_expiry(k, layout)
+
+
 from lib import nav
 
 nav.PAGES["planning"] = st.Page(render_planning, title="생산 차질·대응안", url_path="planning")
@@ -794,6 +799,7 @@ _nav = st.navigation({
     "생산관리": [st.Page(page_today, title="오늘의 생산 위험", url_path="today", default=True),
                  st.Page(page_company, title="원료 소요·재고", url_path="company"),
                  st.Page(page_thaw, title="해동 계획", url_path="thaw"),
+                 st.Page(page_expiry, title="소비기한", url_path="expiry"),
                  st.Page(page_cost, title="원가 영향", url_path="cost"),
                  nav.PAGES["planning"],
                  st.Page(page_orders, title="현장 지시서", url_path="orders"),

@@ -117,6 +117,8 @@ def _company_block(m: A.Market) -> bool:
     from lib.ui_cost import today_summary
     from lib.ui_thaw import today_summary as thaw_summary
     thaw_summary(data)
+    from lib.ui_expiry import today_summary as expiry_summary
+    expiry_summary(data)
     from lib.ui_orders import today_summary as orders_summary
     orders_summary(data, label)
     today_summary(data)

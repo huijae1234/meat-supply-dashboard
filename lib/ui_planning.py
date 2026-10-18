@@ -87,6 +87,8 @@ def _auto_candidates(data, settings) -> dict:
     st.markdown("#### 자동 대응 후보")
     st.caption("부족을 보고 규칙으로 만든 후보입니다(최적화 아님). 대체 원료는 대체표에 허용된 것만, 긴급 현물은 아래 가정으로 만듭니다.")
     _spot_settings(settings)
+    ext_state = st.session_state.get("planning_external")  # 다른 화면(소비기한 등)에서 보낸 대응안
+    ext = ext_state[1] if ext_state and ext_state[0] == P.fingerprint(data) else {}
     # 편집기를 고칠 때마다 화면이 다시 그려지므로, 같은 입력·설정·판단일이면 후보 계산을 다시 하지 않는다
     key = (P.fingerprint(data), repr(sorted((k, repr(v)) for k, v in vars(settings).items())), str(C.today_kst().date()))
     cached = st.session_state.get("auto_candidates")
@@ -97,22 +99,27 @@ def _auto_candidates(data, settings) -> dict:
             _, cands = R.candidates(data, settings, C.today_kst())
         except ValueError as exc:
             st.warning(str(exc))
-            return {}
+            return dict(ext)
         table = R.compare(data, cands, settings) if len(cands) > 1 else None
         st.session_state["auto_candidates"] = (key, cands, table)
-    if len(cands) == 1:
+    if len(cands) == 1 and not ext:
         st.success("부족이 없어 대응 후보가 필요 없습니다.")
         return {}
+    if len(cands) == 1:
+        st.success("부족이 없어 자동 대응 후보는 없습니다. 다른 화면에서 보낸 안을 편집기에 불러올 수 있습니다.")
     if data.substitute is None:
         st.caption("대체표.csv가 없어 대체 원료 후보는 만들지 않았습니다('원료 소요·재고'에서 올릴 수 있습니다).")
-    shown = pd.DataFrame({
+    shown = pd.DataFrame() if table is None else pd.DataFrame({
         "대응안": table["대응안"], "생산 부족": table["생산부족_kg"].map(lambda v: f"{max(v, 0):,.0f}kg"),
         "영향 계획": table["영향계획건수"].map(lambda v: f"{v}건"), "납기 위험": table["납기위험건수"].map(lambda v: f"{v}건"),
         "남은 감산 손실": table["남은감산손실"].map(_won), "위약금": table["위약금"].map(_won), "추가 비용": table["추가비용"].map(_won),
         "합계(참고)": table["합계"].map(_won), "확인할 점": table["경고"],
     })
-    st.dataframe(shown, hide_index=True, use_container_width=True)
-    if table["합계"].isna().all():
+    if table is not None:
+        st.dataframe(shown, hide_index=True, use_container_width=True)
+    if table is None:
+        pass
+    elif table["합계"].isna().all():
         st.caption("판매가·단가가 없어 금액은 계산하지 않았습니다. 생산계획의 판매가_원kg, 재고·입고의 단가_원kg를 넣으면 비교합니다.")
     else:
         st.caption("합계 = 남은 감산 손실(공헌이익) + 위약금 + 추가 비용(긴급 현물 할증·대체 원료비 차이). 계획 물량을 모두 만든다는 보장이 아니며, 금액이 작다고 실행 가능한 안이라는 뜻은 아닙니다.")
@@ -122,13 +129,15 @@ def _auto_candidates(data, settings) -> dict:
                 st.write("· " + n)
             for w in c.warnings:
                 st.warning(w)
-    names = [c.name for c in cands]
+    names = [c.name for c in cands] + [n for n in ext if n not in {c.name for c in cands}]
+    if ext:
+        st.caption("다른 화면에서 보낸 안: " + ", ".join(ext))
     current = st.session_state.get("planning_seed", "감산 수용")
     pick = st.selectbox("편집기에 불러올 대응안", names, index=names.index(current) if current in names else 0)
     if pick != current:
         st.session_state["planning_seed"] = pick
         st.rerun()
-    return {c.name: c.data for c in cands}
+    return {**{c.name: c.data for c in cands}, **ext}
 
 
 def render_planning():
