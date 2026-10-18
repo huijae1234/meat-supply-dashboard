@@ -107,10 +107,10 @@ def render_thaw(k: float, layout) -> None:
     if UC.render_lock("해동 계획"):
         return
     left, right, _ = st.columns([2, 2, 4])
-    if left.button("샘플(가짜) 데이터로 시험", key="thaw_sample", use_container_width=True):
+    if left.button("샘플(가짜) 데이터로 시험", key="thaw_sample", width="stretch"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="thaw_saved", use_container_width=True):
+    if right.button("올려 둔 파일 사용", key="thaw_saved", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     saved = UC.get_settings()
@@ -150,8 +150,8 @@ def render_thaw(k: float, layout) -> None:
 
     if day is not None:
         st.markdown(f"#### {md(day)} 해동실 투입 목록")
-        st.dataframe(_event_table(nxt), hide_index=True, use_container_width=True)
-    st.plotly_chart(_load_chart(tp, tp.base_date + pd.Timedelta(days=1), layout), use_container_width=True)
+        st.dataframe(_event_table(nxt), hide_index=True, width="stretch")
+    st.plotly_chart(_load_chart(tp, tp.base_date + pd.Timedelta(days=1), layout), width="stretch")
     st.caption("막대는 해동을 시작하는 날 해동실에 넣는 냉동 무게입니다. 가장 늦게 넣어도 되는 날(쓰는 날 − 해동일수)로 잡고, 용량을 넘으면 하루씩 앞당깁니다."
                + ("" if tp.capacity else " 해동실 용량은 위 '해동 기본값'에서 정할 수 있습니다."))
 
@@ -159,14 +159,14 @@ def render_thaw(k: float, layout) -> None:
     if len(probs):
         st.dataframe(pd.DataFrame({"날짜": probs["날짜"].map(md), "원료": probs["원료"],
                                    "못 맞추는 양": probs["부족_kg"].map(lambda v: f"{v:,.0f}kg"), "이유": probs["이유"]}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
         st.caption("날짜는 쓰는 날(용량 초과는 해동 시작일)입니다. 해동 시간 부족은 생산일을 늦추거나 냉장 원료로 대체하는 검토가 필요합니다('생산 차질·대응안').")
         timing = probs["이유"].str.startswith(("해동 시간 부족", "해동 투입일 없음", "해동 후 보관 한도")).any()
         stock = probs["이유"].str.startswith("냉동 재고 부족").any()
         seeds = (["생산일 늦추기"] if timing else []) + (["긴급 현물 구매"] if stock else []) + (["대체 원료"] if timing or stock else [])
         if seeds:
             for col, seed in zip(st.columns(len(seeds)), seeds):
-                if col.button(f"'{seed}' 대응안으로 검토", key=f"thaw_to_{seed}", use_container_width=True,
+                if col.button(f"'{seed}' 대응안으로 검토", key=f"thaw_to_{seed}", width="stretch",
                               help="생산 차질·대응안 화면으로 이동해 이 후보를 편집기에 불러옵니다. 원본은 바뀌지 않습니다."):
                     st.session_state["planning_seed"] = seed
                     from lib import nav
@@ -179,7 +179,7 @@ def render_thaw(k: float, layout) -> None:
     st.markdown("#### 전체 해동 일정")
     if len(tp.events):
         full = _event_table(tp.events)
-        st.dataframe(full, hide_index=True, use_container_width=True)
+        st.dataframe(full, hide_index=True, width="stretch")
         st.download_button("해동 지시 목록 내려받기 (CSV)", full.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"해동계획_{tp.base_date:%Y%m%d}.csv", mime="text/csv", key="thaw_dl")
     else:

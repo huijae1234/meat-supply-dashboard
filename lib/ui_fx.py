@@ -65,7 +65,7 @@ def render_fx(k: float, layout) -> None:
               + (f" · 남은 날짜 {status['pending']}일" if status.get("pending") else "")
               + (f" · 오류: {status['error']}" if status.get("error") else "")
               + " · 매일 09:00 자동 수집에 함께 받습니다(당일 환율은 오전 11시 무렵 고시).")
-    if b.button("빠진 날짜 받기", key="fx_collect", disabled=not fx.has_key(), use_container_width=True,
+    if b.button("빠진 날짜 받기", key="fx_collect", disabled=not fx.has_key(), width="stretch",
                 help="최근 180일 중 아직 없는 영업일을 받습니다(하루 1,000건 제한, 한 번에 최대 300건)."):
         with st.spinner("환율을 받는 중..."):
             r = fx.collect(180)
@@ -86,7 +86,7 @@ def render_fx(k: float, layout) -> None:
 
     others = sorted(set(df["cur_unit"]) - {"USD", "KRW"})
     curs = ["USD"] + st.multiselect("함께 볼 통화 (여럿이면 첫날 = 100으로 맞춰 비교)", others, default=[], key="fx_curs", placeholder="통화 선택")
-    st.plotly_chart(_chart(df, curs, layout), use_container_width=True)
+    st.plotly_chart(_chart(df, curs, layout), width="stretch")
     st.caption("매매기준율은 은행 간 거래 기준 환율입니다. 실제 결제 환율(송금·신용장 환율, 수수료)과 다를 수 있습니다.")
 
     st.markdown("#### 수입 원료 원료비 영향")
@@ -111,7 +111,7 @@ def render_fx(k: float, layout) -> None:
         st.dataframe(pd.DataFrame({"제품": t["제품"], "kg당 원료비": t["원료비_원kg"].map(lambda v: f"{v:,.0f}원"),
                                    "환율 반영 후": t["가정원료비_원kg"].map(lambda v: f"{v:,.0f}원"),
                                    "변화": t["변화_원kg"].map(lambda v: f"{v:+,.0f}원"), "계획 기간 변화": (t["가정계획원료비"] - t["계획원료비"]).map(won_big)}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
     st.markdown("#### 환율 시나리오")
     moves = st.multiselect("USD 변화(%)", [-20.0, -15.0, -10.0, -5.0, 5.0, 10.0, 15.0, 20.0], default=[-10.0, -5.0, 5.0, 10.0],
                            format_func=lambda v: f"{v:+.0f}%", key="fx_moves", placeholder="변화 폭 선택")
@@ -124,6 +124,6 @@ def render_fx(k: float, layout) -> None:
             "원료비 변화": sc["원료비 변화율"].map(_pct),
             "원료비율": [f"{a:.1f}% → {b:.1f}%" if a == a else "-" for a, b in zip(sc["원료비율 전"], sc["원료비율 후"])],
             "가장 크게 바뀌는 제품": sc["가장 크게 오르는 제품"],
-        }), hide_index=True, use_container_width=True)
+        }), hide_index=True, width="stretch")
         st.caption(f"수입 원료 단가 변화 = USD 변화 × 전가율 {saved.fx_pass:.0f}%. 국산 원료는 그대로 둡니다. 명시된 생산계획 기간의 원료비만 계산합니다(가공비·물류비 제외).")
     st.caption("원료별로 다른 가정을 넣거나 국산 경락가와 함께 보려면 '원가 영향' 화면의 자동 채우기 기준을 쓰세요.")

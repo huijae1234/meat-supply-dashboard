@@ -44,16 +44,16 @@ def _assumption_editor(data: C.CompanyData, prices: pd.DataFrame, basis: str, ma
              "시장 30일 변화": f"{mk[n][1]} {mk[n][0]:+.1f}%" if n in mk else "연결 시세 없음",
              "단가 변동 가정(%)": float(saved.get(n, 0.0))} for n in used]
     b1, b2, _ = st.columns([2.2, 1.2, 4])
-    if b1.button("시장 30일 변화율로 채우기", disabled=not mk, use_container_width=True,
+    if b1.button("시장 30일 변화율로 채우기", disabled=not mk, width="stretch",
                  help="선택한 기준의 최근 30일 변화율을 그대로 매입 단가 변화로 가정합니다. 연결 시세가 없는 원료는 0%로 둡니다. 실제 매입가 변화와 다를 수 있습니다."):
         st.session_state["cost_pct"] = {n: v for n, (v, _) in mk.items()}
         st.session_state["cost_ver"] = ver + 1
         st.rerun()
-    if b2.button("가정 초기화", use_container_width=True):
+    if b2.button("가정 초기화", width="stretch"):
         st.session_state["cost_pct"] = {}
         st.session_state["cost_ver"] = ver + 1
         st.rerun()
-    edited = st.data_editor(pd.DataFrame(rows), hide_index=True, use_container_width=True, key=f"cost_editor_{ver}",
+    edited = st.data_editor(pd.DataFrame(rows), hide_index=True, width="stretch", key=f"cost_editor_{ver}",
                             disabled=["원료", "기준 단가(원/kg)", "시장 30일 변화"],
                             column_config={"기준 단가(원/kg)": st.column_config.NumberColumn(format="%,.0f"),
                                            "단가 변동 가정(%)": st.column_config.NumberColumn(min_value=-50.0, max_value=100.0, step=0.5, format="%+.1f")})
@@ -110,7 +110,7 @@ def _assumption_store(label: str, basis: str, pct: dict, cur_total: float, new_t
                  "단가기준": K.BASIS.get(basis, basis), "자동채우기기준": K.SOURCES.get(st.session_state.get("cost_source", ""), ""),
                  "가정": changed, "계획기간원료비_현재": round(cur_total), "계획기간원료비_가정": round(new_total),
                  "원료비율_현재": None if r0 != r0 else round(r0, 2), "원료비율_가정": None if r1 != r1 else round(r1, 2)}
-        if b.button("저장", key="cost_assume_save", use_container_width=True, disabled=not name.strip()):
+        if b.button("저장", key="cost_assume_save", width="stretch", disabled=not name.strip()):
             if sample:
                 st.session_state["sample_assumptions"] = [entry, *[e for e in items if e["이름"] != entry["이름"]]][:K.MAX_ASSUMPTIONS]
             else:
@@ -126,11 +126,11 @@ def _assumption_store(label: str, basis: str, pct: dict, cur_total: float, new_t
             st.caption("원료별 가정: " + (", ".join(f"{k} {v:+.1f}%" for k, v in chosen["가정"].items()) or "변화 없음")
                        + f" · 단가 기준 {chosen['단가기준']}")
             x, y = st.columns(2)
-            if x.button("이 가정 불러오기", key="cost_assume_load", use_container_width=True):
+            if x.button("이 가정 불러오기", key="cost_assume_load", width="stretch"):
                 st.session_state["cost_pct"] = dict(chosen["가정"])
                 st.session_state["cost_ver"] = st.session_state.get("cost_ver", 0) + 1
                 st.rerun()
-            if y.button("조치 이력에 연결", key="cost_assume_link", use_container_width=True):
+            if y.button("조치 이력에 연결", key="cost_assume_link", width="stretch"):
                 st.session_state["pending_action"] = {"출처": label, "판단일": str(C.today_kst().date()), "대응안": f"원가 가정: {chosen['이름']}",
                                                       "원가가정": chosen}
                 st.success("'조치 이력' 화면에서 담당자·기한·협의 내용을 적어 저장하세요. 가정과 계산 결과가 근거로 함께 남습니다.")
@@ -172,10 +172,10 @@ def render_cost(k: float, layout) -> None:
     if UC.render_lock("원가 영향"):
         return
     left, right, _ = st.columns([2, 2, 4])
-    if left.button("샘플(가짜) 데이터로 시험", key="cost_sample", use_container_width=True):
+    if left.button("샘플(가짜) 데이터로 시험", key="cost_sample", width="stretch"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="cost_saved", use_container_width=True):
+    if right.button("올려 둔 파일 사용", key="cost_saved", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     data, label = UC.current_company()
@@ -200,7 +200,7 @@ def render_cost(k: float, layout) -> None:
                      help="장부 기준: 지금 가진 재고와 입고 예정 로트의 수량 가중 평균. 재구매 기준: 가장 늦은 입고 예정 로트의 단가(다음에 살 때 값에 가깝습니다).")
     pt = prices.assign(**{"평균 단가": prices["평균단가"].map(won), "입고 예정 단가": prices["입고예정단가"].map(won),
                           "단가 적힌 수량 비율": prices["단가입력비율"].map(lambda v: f"{v * 100:.0f}%")})
-    st.dataframe(pt[["원료", "평균 단가", "입고 예정 단가", "단가 적힌 수량 비율"]], hide_index=True, use_container_width=True)
+    st.dataframe(pt[["원료", "평균 단가", "입고 예정 단가", "단가 적힌 수량 비율"]], hide_index=True, width="stretch")
     partial = prices[(prices["단가입력비율"] < 0.999) & prices["평균단가"].notna()]["원료"].tolist()
     if partial:
         st.caption("일부 로트에만 단가가 있는 원료는 단가가 적힌 로트로만 평균을 냈습니다: " + ", ".join(partial))
@@ -249,9 +249,9 @@ def render_cost(k: float, layout) -> None:
         "판매가": prod["판매가_원kg"].map(won), "원료비율": prod["원료비율"].map(_ratio), "가정 후 원료비율": prod["가정원료비율"].map(_ratio),
         "계획 물량": prod["계획물량_kg"].map(ton), "계획 기간 원료비 변화": (prod["가정계획원료비"] - prod["계획원료비"]).map(lambda v: "-" if math.isnan(v) else ("+" if v > 0 else "") + won_big(v)),
     })
-    st.dataframe(table, hide_index=True, use_container_width=True)
+    st.dataframe(table, hide_index=True, width="stretch")
     if len(ok):
-        st.plotly_chart(_cost_chart(comp[comp["제품"].isin(ok["제품"])], ok, layout), use_container_width=True)
+        st.plotly_chart(_cost_chart(comp[comp["제품"].isin(ok["제품"])], ok, layout), width="stretch")
         st.caption("막대는 현재 단가 기준 원료별 원료비입니다. ◆는 단가 변동 가정을 적용한 원료비, 세로 막대(|)는 판매가입니다."
                    + (" ○는 부산물 회수를 뺀 순원료비이며, 원료비율·계획 기간 원료비·변화는 모두 순원료비 기준입니다." if has_by else ""))
         if not has_by:
@@ -259,7 +259,7 @@ def render_cost(k: float, layout) -> None:
     with st.expander("제품별 원료 구성 자세히"):
         d = comp.assign(**{"투입량(제품 1kg당)": comp["투입량_kg"].map(lambda v: f"{v:.2f}kg"), "단가 ": comp["단가"].map(won), "해동 감량": comp["해동감량률"].map(lambda v: f"{v:.1f}%" if v else "-"),
                            "가정 단가": comp["가정단가"].map(won), "원료비 ": comp["원료비"].map(won), "가정 원료비": comp["가정원료비"].map(won)})
-        st.dataframe(d[["제품", "원료", "투입량(제품 1kg당)", "단가 ", "해동 감량", "가정 단가", "원료비 ", "가정 원료비", "근거"]], hide_index=True, use_container_width=True)
+        st.dataframe(d[["제품", "원료", "투입량(제품 1kg당)", "단가 ", "해동 감량", "가정 단가", "원료비 ", "가정 원료비", "근거"]], hide_index=True, width="stretch")
         st.caption("냉동 원료는 해동 후 무게로 배합하므로, 원료비 = 투입량 × 단가 ÷ (1 − 해동 감량률)입니다. 가정 단가도 해동 후 기준입니다.")
 
     st.markdown("#### 4. 원료별 매입 금액")
@@ -269,7 +269,7 @@ def render_cost(k: float, layout) -> None:
                        f"앞으로 {DAYS}일 소요": amt[f"{DAYS}일소요_kg"].map(ton), f"{DAYS}일 소요 금액": amt[f"{DAYS}일소요금액"].map(won_big),
                        "발주 검토량": amt["발주검토량_kg"].map(lambda v: ton(v) if v > 0 else "-"),
                        "발주 금액(참고)": amt["발주금액"].map(lambda v: won_big(v) if v > 0 else "-")})
-    st.dataframe(at, hide_index=True, use_container_width=True)
+    st.dataframe(at, hide_index=True, width="stretch")
     if proj.actionable:
         st.caption(f"발주 금액은 '원료 소요·재고'의 발주 검토량 × 재구매 기준 단가(가정 반영)입니다. 합계 {won_big(float(amt['발주금액'].sum()))}. "
                    "최소 발주량·운임·관세·할인은 반영하지 않습니다.")

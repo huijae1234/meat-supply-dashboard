@@ -90,7 +90,7 @@ st.markdown(
 # 모든 설정(육종 포함)은 우측 상단 '설정' 팝오버 안에 모은다
 _, _bar_set = st.columns([8, 1.2])
 with _bar_set:
-    with st.popover("설정", use_container_width=True):
+    with st.popover("설정", width="stretch"):
         species = st.radio("육종", ["pork", "beef"], format_func=SPECIES_KO.get, horizontal=True, key="species")
         st.divider()
         st.markdown("**재고 경보 기준**")
@@ -194,7 +194,7 @@ def page_syn_status():
     fig.add_trace(go.Scatter(x=bad["week_start"], y=bad["ending_stock_kg"], mode="markers", name="경보 주",
                              marker=dict(color=RED, size=8, line=dict(color="white", width=1))))
     shade_forecast(fig)
-    st.plotly_chart(layout(fig, height=360), use_container_width=True)
+    st.plotly_chart(layout(fig, height=360), width="stretch")
     st.subheader("자동 인사이트")
     for sp in [species, "beef" if species == "pork" else "pork"]:
         st.markdown(f"**{SPECIES_KO[sp]}**")
@@ -204,7 +204,7 @@ def page_syn_status():
     with st.expander("합성 데이터 품질"):
         err = T["meat_errors"]
         st.write(f"소비량 입력 오류 **{len(err)}건**을 그룹 중앙값으로 보정했습니다 (중앙값의 {OUTLIER_RATIO:g}배 초과).")
-        st.dataframe(err.head(50), use_container_width=True, height=200)
+        st.dataframe(err.head(50), width="stretch", height=200)
         st.caption("fact_import_monthly 는 오류 셀이 있는 엑셀 대신 로컬 CSV를 사용합니다.")
 
 # ================================================================== ② 수급 추이·예측
@@ -224,7 +224,7 @@ def page_syn_trend():
                                  line=dict(width=0), name="자체 모델 95% 구간", hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=mf["week_start"], y=mf["model"], name="자체 모델", line=dict(color=MODEL, dash="dot", width=2)))
     shade_forecast(fig)
-    st.plotly_chart(layout(fig, f"{sp_ko} · {METRICS[metric]}", 420), use_container_width=True)
+    st.plotly_chart(layout(fig, f"{sp_ko} · {METRICS[metric]}", 420), width="stretch")
 
     if metric in MODELED:
         l, r = st.columns(2)
@@ -234,13 +234,13 @@ def page_syn_trend():
             for c in MODELED:
                 b = A.backtest(sup, cal, species, c)
                 rows.append({"지표": METRICS[c], "자체 모델": f"{b['mape_model']:.1f}%", "전년 동주 단순예측": f"{b['mape_naive']:.1f}%"})
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             st.caption("모델: 추세 + 연간 계절성 + 명절/삼겹살데이/휴가철/가정의 달 변수를 쓴 릿지 회귀.")
         with r:
             st.markdown("**파일 예측 vs 자체 모델** (선택 지표)")
             t = mf.assign(week_start=mf["week_start"].dt.strftime("%m/%d"))
             t = t.rename(columns={"week_start": "주", "file_forecast": "파일 예측", "model": "자체 모델", "gap_pct": "차이(%)"})
-            st.dataframe(t[["주", "파일 예측", "자체 모델", "차이(%)"]].round(1), hide_index=True, use_container_width=True, height=280)
+            st.dataframe(t[["주", "파일 예측", "자체 모델", "차이(%)"]].round(1), hide_index=True, width="stretch", height=280)
         g = mf["gap_pct"].abs().mean()
         st.info(f"13주 평균 절대 차이 **{g:.1f}%**. 파일 예측이 자체 모델의 95% 구간을 벗어난 주는 **{((mf['file_forecast'] > mf['hi']) | (mf['file_forecast'] < mf['lo'])).sum()}주**입니다.")
     else:
@@ -261,22 +261,22 @@ def page_syn_season():
         for y, g in d.groupby("year"):
             fig.add_trace(go.Scatter(x=g["wk"], y=g[metric3], name=str(y), mode="lines"))
         fig.update_xaxes(title="ISO 주차")
-        st.plotly_chart(layout(fig, "연도별 겹쳐보기", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, "연도별 겹쳐보기", 340), width="stretch")
     with r:
         fig = go.Figure(go.Scatter(x=s["week_start"], y=s["seasonal"], line=dict(color=MODEL), name="계절 성분"))
-        st.plotly_chart(layout(fig, "계절 성분 (STL)", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, "계절 성분 (STL)", 340), width="stretch")
     an = s[s["resid_z"].abs() >= thr]
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=s["week_start"], y=s["value"], name="실적", line=dict(color=ACTUAL)))
     fig.add_trace(go.Scatter(x=s["week_start"], y=s["trend"] + s["seasonal"], name="추세+계절", line=dict(color=GRAY, dash="dot")))
     fig.add_trace(go.Scatter(x=an["week_start"], y=an["value"], mode="markers", name="이상 주", marker=dict(color=RED, size=9)))
-    st.plotly_chart(layout(fig, f"이상 주 {len(an)}개", 360), use_container_width=True)
+    st.plotly_chart(layout(fig, f"이상 주 {len(an)}개", 360), width="stretch")
     if len(an):
         t = an.assign(주=an["week_start"].dt.strftime("%Y-%m-%d"), 실적=an["value"].round(0), 기대=(an["trend"] + an["seasonal"]).round(0), z=an["resid_z"].round(1))
         t["편차(%)"] = ((t["실적"] / t["기대"] - 1) * 100).round(1)
         t = t.merge(cal[["week_start", "holiday_name"]].assign(주=lambda x: x["week_start"].dt.strftime("%Y-%m-%d")).drop(columns="week_start"), on="주", how="left")
         t = t.rename(columns={"holiday_name": "명절"})
-        st.dataframe(t[["주", "실적", "기대", "편차(%)", "z", "명절"]].sort_values("z", key=abs, ascending=False), hide_index=True, use_container_width=True)
+        st.dataframe(t[["주", "실적", "기대", "편차(%)", "z", "명절"]].sort_values("z", key=abs, ascending=False), hide_index=True, width="stretch")
     st.info("합성 데이터 화면입니다. 실제 도축·생산 주간 데이터를 제공하는 API를 찾지 못했습니다 (docs/API_SURVEY.md).")
 
 # ================================================================== ④ 명절·이벤트
@@ -293,14 +293,14 @@ def page_syn_event():
                                text=[f"{v:+.0f}%" for v in hc["mean"] - 100], textposition="outside"))
         fig.update_xaxes(title="명절 주 기준 (0 = 명절 주, 음수 = 이전)", dtick=1)
         fig.update_yaxes(title="평소 대비 %")
-        st.plotly_chart(layout(fig, "명절 전후 소비 변화 (설·추석 평균)", 360), use_container_width=True)
+        st.plotly_chart(layout(fig, "명절 전후 소비 변화 (설·추석 평균)", 360), width="stretch")
     with r:
         rows = []
         for name, flag in [("삼겹살데이 주", "is_samgyeopsal_day_week"), ("여름 휴가철", "is_summer_vacation_season"), ("가정의 달", "is_family_month")]:
             on, off = ev.loc[ev[flag] == 1, "index"], ev.loc[ev[flag] == 0, "index"]
             rows.append({"이벤트": name, "해당 주 지수": round(on.mean(), 1) if len(on) else np.nan, "그 외 지수": round(off.mean(), 1), "차이(%p)": round(on.mean() - off.mean(), 1) if len(on) else np.nan, "주 수": len(on)})
         st.markdown("**이벤트 효과** (지수 100 = 평소)")
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
         st.caption("지수 = 주간 소비량 ÷ 13주 중심 이동 중앙값 × 100. 표본(주 수)이 적은 이벤트는 참고용입니다.")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ev["week_start"], y=ev["index"], line=dict(color=ACTUAL), name="소비 지수"))
@@ -308,7 +308,7 @@ def page_syn_event():
     fig.add_trace(go.Scatter(x=hol["week_start"], y=hol["index"], mode="markers+text", text=hol["holiday_name"].map({"seollal": "설", "chuseok": "추석"}),
                              textposition="top center", marker=dict(color=FILEFC, size=10), name="명절 주"))
     fig.add_hline(y=100, line_dash="dot", line_color=GRAY)
-    st.plotly_chart(layout(fig, "주간 소비 지수", 340), use_container_width=True)
+    st.plotly_chart(layout(fig, "주간 소비 지수", 340), width="stretch")
     st.info("재고 관점: 명절 **직전 주**까지 재고를 확보하고, 명절 **다음 주**(소비 피크 후행)의 보충 물량을 점검하세요.")
     st.info("합성 데이터 화면입니다. 실제 소비량 데이터를 제공하는 API를 찾지 못했습니다.")
 
@@ -326,14 +326,14 @@ def page_syn_import():
                                      line=dict(color=cc[c], width=1), fillcolor=theme.rgba(cc[c], 0.55)))
         fig.update_yaxes(title="%")
         shade = fig.add_vrect(x0=LAST.to_pydatetime(), x1=d["month"].max().to_pydatetime(), fillcolor="rgba(11,11,11,0.04)", line_width=0)
-        st.plotly_chart(layout(fig, "수입국 비중 추이", 360), use_container_width=True)
+        st.plotly_chart(layout(fig, "수입국 비중 추이", 360), width="stretch")
     with rr:
         fig = go.Figure()
         for c, g in d.groupby("country"):
             fig.add_trace(go.Scatter(x=g["month"], y=g["cif_price_usd_kg"], name=c, mode="lines", line=dict(color=cc[c], width=2)))
         fig.add_vrect(x0=LAST.to_pydatetime(), x1=d["month"].max().to_pydatetime(), fillcolor="rgba(11,11,11,0.04)", line_width=0)
         fig.update_yaxes(title="USD/kg")
-        st.plotly_chart(layout(fig, "수입 단가 (CIF)", 360), use_container_width=True)
+        st.plotly_chart(layout(fig, "수입 단가 (CIF)", 360), width="stretch")
     l, rr = st.columns(2)
     with l:
         # 집중도(HHI) = 나라별 비중(%)의 제곱 합. 나라별 기여분을 선으로 그리고 합계를 굵은 선으로 겹친다.
@@ -355,14 +355,14 @@ def page_syn_import():
         fig.update_yaxes(title="집중도 점수 (나라별 비중²)", range=[0, top_y])
         fig = layout(fig, "수입국 집중도 추이", 460)
         fig.update_layout(legend=dict(orientation="h", x=0, y=-0.18, yanchor="top"), margin=dict(l=10, r=10, t=60, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         parts = ", ".join(f"{row['country']} {row['import_share_pct']:.0f}%→{row['import_share_pct'] ** 2:,.0f}" for _, row in last_d.head(3).iterrows())
         st.caption(f"**읽는 법:** 얇은 선은 나라별 기여(그 나라 비중의 제곱), 굵은 선은 그 합계인 집중도(HHI)입니다. "
                    f"비중을 제곱하므로 큰 나라일수록 기여가 급격히 커집니다. 가장 최근 달: {parts}. "
                    "점선 '기타'는 여러 나라를 묶은 값이라 실제 기여를 과소 계산합니다. 배경 구간(분산 1,500 미만 · 중간 · 고집중 2,500 이상)은 통상 기준이며 이 대시보드에 맞게 검증한 값은 아닙니다.")
     with rr:
         fig = go.Figure(go.Bar(x=r["month"], y=r["cif_yoy_pct"], marker_color=[RED if v > 0 else BLUE for v in r["cif_yoy_pct"].fillna(0)]))
-        st.plotly_chart(layout(fig, "평균 CIF 단가 전년 동월 대비 (%)", 300), use_container_width=True)
+        st.plotly_chart(layout(fig, "평균 CIF 단가 전년 동월 대비 (%)", 300), width="stretch")
     st.caption("월 합계는 4/5주 차이가 있어 주 평균(weekly_avg_kg)으로 환산해 비교합니다. '기타'는 여러 국가를 묶은 값이라 집중도가 낮게 계산될 수 있습니다.")
     st.info("합성 데이터 화면입니다. 관세청 수출입실적 API 후보가 있으나 신청·검증 전입니다 (docs/API_SURVEY.md). 실제 수입 소비자가는 '실제 데이터' 화면 참고.")
 
@@ -378,19 +378,19 @@ def page_syn_price():
         fig.add_trace(go.Scatter(x=ps["week_start"], y=ps["wholesale"], name="도매", line=dict(color=ACTUAL)))
         fig.add_trace(go.Scatter(x=ps["week_start"], y=ps["retail"], name="소매", line=dict(color=FILEFC)))
         fig.update_yaxes(title="원/kg")
-        st.plotly_chart(layout(fig, "도매 vs 소매 가격", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, "도매 vs 소매 가격", 340), width="stretch")
     with r:
         lc = A.lag_correlation(ps)
         fig = go.Figure(go.Bar(x=lc["lag"], y=lc["corr"], marker_color=[ACTUAL if v < lc["corr"].max() else FILEFC for v in lc["corr"]],
                                text=lc["corr"].round(2), textposition="outside"))
         fig.update_xaxes(title="소매가 반영 지연 (주)", dtick=1)
-        st.plotly_chart(layout(fig, "도매가 변화 → 소매가 변화 상관", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, "도매가 변화 → 소매가 변화 상관", 340), width="stretch")
         best = int(lc.loc[lc["corr"].idxmax(), "lag"])
         st.caption(f"상관이 가장 큰 지연: **{best}주**. 데이터 설명상 소매가는 도매가 대비 1~2주 지연 반영됩니다.")
     l, r = st.columns(2)
     with l:
         fig = go.Figure(go.Scatter(x=ps["week_start"], y=ps["spread"], line=dict(color=MODEL)))
-        st.plotly_chart(layout(fig, "소매-도매 스프레드 (원/kg)", 300), use_container_width=True)
+        st.plotly_chart(layout(fig, "소매-도매 스프레드 (원/kg)", 300), width="stretch")
     with r:
         dim = st.radio("소비 분해", ["채널", "지역", "원산지"], horizontal=True)
         m2 = meat[(meat["species"] == species) & (meat["data_type"] == "actual")]
@@ -402,7 +402,7 @@ def page_syn_price():
         g.index = [lab[key].get(i, i) if key in lab else {"domestic": "국산", "import": "수입"}[i] for i in g.index]
         fig = go.Figure(go.Bar(x=g.values / 1e6, y=g.index, orientation="h", marker_color=ACTUAL))
         fig.update_xaxes(title="누적 소비량 (천 톤)")
-        st.plotly_chart(layout(fig, f"{dim}별 누적 소비", 300), use_container_width=True)
+        st.plotly_chart(layout(fig, f"{dim}별 누적 소비", 300), width="stretch")
     st.caption(f"소매가 1% 상승 시 소비 {price_e:+.2f}%" if (price_e := A.price_elasticity(ps)) < 0 else
                f"주의: 소비-가격 단순 로그 상관이 양(+{price_e:.2f})입니다. 수요가 가격을 끌어올리는 효과가 섞여 있어 인과적 탄력성으로 해석하지 마세요.")
     st.info("합성 데이터 화면입니다. **실제 데이터 대응:** '실제 데이터' 화면(소비자가·경락가·국산 vs 수입)과 '실제 분석·예측' 화면(경락가→소비자가 시차). 실제 소비량 데이터는 없습니다.")
@@ -416,22 +416,22 @@ def page_syn_flow():
     with l:
         piv = fb.pivot_table(index="flow", columns="month", values="lead_z")
         fig = go.Figure(go.Heatmap(z=piv.values, x=[m.strftime("%y-%m") for m in piv.columns], y=piv.index, colorscale="RdYlGn_r", zmid=0, colorbar=dict(title="z")))
-        st.plotly_chart(layout(fig, "리드타임 z-score (구간별 자체 이력 기준)", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, "리드타임 z-score (구간별 자체 이력 기준)", 340), width="stretch")
     with r:
         piv = fb.pivot_table(index="flow", columns="month", values="margin_z")
         fig = go.Figure(go.Heatmap(z=piv.values, x=[m.strftime("%y-%m") for m in piv.columns], y=piv.index, colorscale="RdYlGn_r", zmid=0, colorbar=dict(title="z")))
-        st.plotly_chart(layout(fig, "마진 z-score", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, "마진 z-score", 340), width="stretch")
     nb = A.node_balance(flow, species)
     nb["rel"] = nb.groupby("node")["ratio"].transform(lambda s: s / s.mean() * 100)
     fig = go.Figure()
     for n, g in nb.groupby("node"):
         fig.add_trace(go.Scatter(x=g["month"], y=g["rel"], name=n))
     fig.add_hline(y=100, line_dash="dot", line_color=GRAY)
-    st.plotly_chart(layout(fig, "노드 유출/유입 비율 (자기 평균=100, 낮을수록 물량이 쌓이는 중)", 300), use_container_width=True)
+    st.plotly_chart(layout(fig, "노드 유출/유입 비율 (자기 평균=100, 낮을수록 물량이 쌓이는 중)", 300), width="stretch")
     top = fb.sort_values("score", ascending=False).head(8)
     st.markdown("**병목 신호 상위 구간·월**")
     st.dataframe(top.assign(월=top["month"].dt.strftime("%Y-%m"), 리드타임=top["lead"].round(2), 마진=top["margin"].round(0))[["월", "flow", "리드타임", "lead_z", "마진", "margin_z", "score"]].round(2),
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
     st.caption("한 구간의 평소 리드타임·마진 대비 얼마나 벗어났는지(z)로 병목을 봅니다. 유출/유입 비율은 구조적으로 1이 아니어서 평균 대비 변화만 해석하세요.")
     st.info("합성 데이터 화면입니다. 단계별 물량·마진·리드타임을 제공하는 공개 데이터를 찾지 못했습니다. 경락가→소비자가 스프레드가 마진의 근사치입니다.")
 
@@ -477,13 +477,13 @@ def page_analysis():
         fig.add_trace(go.Scatter(x=sa["month"], y=sa["stock_kg"], name="실제 재고", mode="lines+markers", line=dict(color=ACTUAL, width=2)))
         bad9 = sa[sa["signal"] != "정상"]
         fig.add_trace(go.Scatter(x=bad9["month"], y=bad9["stock_kg"], mode="markers", name="경보", marker=dict(color=RED, size=10)))
-        st.plotly_chart(layout(fig, f"{sp9} 월 재고 (kg)", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, f"{sp9} 월 재고 (kg)", 340), width="stretch")
         pa9 = LA.part_alerts(stk9, kd9, k)
         if len(pa9):
             t = pa9.assign(최신재고=(pa9["latest_kg"] / 1000).round(0), **{"전월(%)": pa9["mom_pct"].round(1), "평소 대비": pa9["z"].map(deviation_word)})
             st.markdown("**부위별 경보** (자기 이력 대비)")
             st.dataframe(t.rename(columns={"part": "부위", "signal": "신호"})[["부위", "최신재고", "전월(%)", "평소 대비", "신호"]].rename(columns={"최신재고": "최신 재고(톤)"}),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
         st.caption("'평소 수준'은 최근 흐름(추세)과 계절 패턴을 반영해 계산한 값입니다. 재고 기록이 31개월뿐이라 단순한 방식을 썼고, 평소보다 벗어난 정도를 경보 기준으로 봅니다.")
 
         # ---------------- 가격 경보
@@ -494,7 +494,7 @@ def page_analysis():
         st.markdown(f"경보 {len(hot)}건 / 전체 {len(pal)}개 부위")
         show = pal.assign(**{"최신가(원/kg)": pal["latest_krw_kg"].round(0), "평년 대비(%)": pal["gap_pct"].round(1), "30일(%)": pal["chg30_pct"].round(1)})
         st.dataframe(show.rename(columns={"item": "부위", "streak": "연속", "alert": "경보"})[["종류", "부위", "최신가(원/kg)", "평년 대비(%)", "30일(%)", "연속", "경보"]],
-                     hide_index=True, use_container_width=True, height=300)
+                     hide_index=True, width="stretch", height=300)
 
         # ---------------- 예측
         st.markdown("#### 예측과 정확도 확인")
@@ -508,8 +508,8 @@ def page_analysis():
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["lo"], fill="tonexty", fillcolor="rgba(82,81,78,0.10)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["pred"], name=f"예측({model_name(fm['best'])})", line=dict(color=MODEL, dash="dot", width=2), mode="lines+markers"))
-            st.plotly_chart(layout(fig, f"{sp9} 월 재고 3개월 예측", 320), use_container_width=True)
-            st.dataframe(_bt(fm["backtest"]), hide_index=True, use_container_width=True)
+            st.plotly_chart(layout(fig, f"{sp9} 월 재고 3개월 예측", 320), width="stretch")
+            st.dataframe(_bt(fm["backtest"]), hide_index=True, width="stretch")
             if fm["improve_pct"] > 0:
                 st.success(f"선택 모델이 직전값 기준선보다 오차 {fm['improve_pct']:.1f}% 감소")
             else:
@@ -526,8 +526,8 @@ def page_analysis():
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["lo"], fill="tonexty", fillcolor="rgba(82,81,78,0.10)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["pred"], name=f"예측({model_name(fd['best'])})", line=dict(color=MODEL, dash="dot", width=2)))
             fig.update_yaxes(title="원/kg")
-            st.plotly_chart(layout(fig, f"{it9} 소비자가 10영업일 예측", 320), use_container_width=True)
-            st.dataframe(_bt(fd["backtest"]), hide_index=True, use_container_width=True)
+            st.plotly_chart(layout(fig, f"{it9} 소비자가 10영업일 예측", 320), width="stretch")
+            st.dataframe(_bt(fd["backtest"]), hide_index=True, width="stretch")
             if fd["improve_pct"] > 0:
                 st.success(f"선택 모델이 직전값 기준선보다 오차 {fd['improve_pct']:.1f}% 감소")
             else:
@@ -550,7 +550,7 @@ def page_analysis():
                 fig = go.Figure(go.Bar(x=ll["lag"], y=ll["corr"], marker_color=[BLUE if p < 0.05 else GRAY for p in ll["p"]],
                                        text=[f"{c:+.2f}" for c in ll["corr"]], textposition="outside"))
                 fig.update_xaxes(title="소비자가 반영 지연 (주)", dtick=1)
-                st.plotly_chart(layout(fig, f"{lbl}: 몇 주 뒤에 따라가나", 300), use_container_width=True)
+                st.plotly_chart(layout(fig, f"{lbl}: 몇 주 뒤에 따라가나", 300), width="stretch")
                 sig_n = int((ll["p"] < 0.05).sum())
                 note = " 뚜렷한 전달 시차는 확인되지 않았습니다." if sig_n <= 1 else ""
                 st.caption(f"파란 막대는 우연으로 보기 어려운 관계입니다. 확인한 {len(ll)}개 시차 중 {sig_n}개만 그렇고, 데이터가 {int(ll['n'].min())}~{int(ll['n'].max())}주뿐이라 확정적이지 않습니다.{note}")
@@ -563,7 +563,7 @@ def page_analysis():
                 fig = go.Figure(go.Bar(x=sp_c["lag_months"], y=sp_c["corr"], marker_color=[BLUE if p < 0.05 else GRAY for p in sp_c["p"]],
                                        text=[f"{c:+.2f}" for c in sp_c["corr"]], textposition="outside"))
                 fig.update_xaxes(title="재고 변화 후 가격 반영 지연 (개월)", dtick=1)
-                st.plotly_chart(layout(fig, f"{sp9} 재고가 바뀌면 {main9} 가격이 몇 달 뒤에 따라가나", 300), use_container_width=True)
+                st.plotly_chart(layout(fig, f"{sp9} 재고가 바뀌면 {main9} 가격이 몇 달 뒤에 따라가나", 300), width="stretch")
                 st.caption(f"데이터가 {int(sp_c['n'].min())}~{int(sp_c['n'].max())}개월뿐이라, 관계처럼 보여도 우연일 가능성이 큽니다.")
             else:
                 st.info("표본이 부족합니다.")
@@ -575,7 +575,7 @@ def page_analysis():
         if hist:
             st.caption("수집 직후 규칙을 평가해 새로 생긴 경보만 기록합니다 (같은 경보는 다시 보내지 않음). Windows 알림은 `collect.py` 실행 시 발송됩니다.")
             st.dataframe(pd.DataFrame(hist).rename(columns={"at": "시각", "level": "등급", "rule": "규칙", "message": "내용"})[["시각", "등급", "규칙", "내용"]],
-                         hide_index=True, use_container_width=True, height=260)
+                         hide_index=True, width="stretch", height=260)
         else:
             st.info("아직 발송된 경보가 없습니다. `python -m lib.alerts` 로 지금 평가해 볼 수 있습니다.")
 
@@ -595,7 +595,7 @@ def page_live():
         f"(개발계정 하루 1,000건 제한) · **가격 데이터** "
         + (f"{pdl['date'].min():%Y-%m-%d} ~ {pdl['date'].max():%Y-%m-%d}" if len(pdl) else "-"))
     with c4:
-        if st.button("지금 갱신 (최근 데이터)", use_container_width=True):
+        if st.button("지금 갱신 (최근 데이터)", width="stretch"):
             bar = st.progress(0.0, text="API 호출 중...")
             res = live.refresh(days_back=10, progress=lambda i, n: bar.progress(i / max(n, 1), text=f"{i}/{n}"))
             bar.empty()
@@ -619,7 +619,7 @@ def page_live():
             st.write(f"마지막 수집 {status['at']} · 호출 {status['calls']}건 · 실패 {status['errors']}건 · 대기 {status['pending']}건")
         if issues:
             st.dataframe(pd.DataFrame(issues).rename(columns={"level": "등급", "table": "테이블", "when": "시점", "detail": "내용"}),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
         else:
             st.write("품질 점검에서 발견된 이상이 없습니다.")
         if errs:
@@ -686,14 +686,14 @@ def page_live():
             fig.add_trace(go.Scatter(x=sk["month"], y=sk["stock_kg"], name="재고", line=dict(color=ACTUAL, width=2), mode="lines+markers"))
             bad = sk[sk["z"].abs() >= k]
             fig.add_trace(go.Scatter(x=bad["month"], y=bad["stock_kg"], mode="markers", name="경보", marker=dict(color=RED, size=10)))
-            st.plotly_chart(layout(fig, f"{sp_ko} 재고 합계 (kg)", 340), use_container_width=True)
+            st.plotly_chart(layout(fig, f"{sp_ko} 재고 합계 (kg)", 340), width="stretch")
         with r:
             parts = stk[(stk["kind"] == kd) & (stk["part"] != "합계") & (stk["month"] >= stk["month"].max() - pd.DateOffset(months=11))]
             fig = go.Figure()
             for p, g in parts.groupby("part"):
                 fig.add_trace(go.Bar(x=g["month"], y=g["stock_kg"], name=p))
             fig.update_layout(barmode="stack")
-            st.plotly_chart(layout(fig, "부위별 재고 (최근 12개월)", 340), use_container_width=True)
+            st.plotly_chart(layout(fig, "부위별 재고 (최근 12개월)", 340), width="stretch")
         zl = sk.iloc[-1]["z"]
         sig = "부족" if zl <= -k else "과잉" if zl >= k else "정상"
         live_notes.append(("bad" if sig != "정상" else "ok", f"{sp_ko} 실제 재고({sk['month'].iloc[-1]:%Y-%m})는 **{sig}** 구간입니다 ({vs_normal((sk.iloc[-1]['stock_kg'] / mu - 1) * 100).replace('평소보다', '전체 평균보다')}, 전월 {mom:+.1f}%)."))
@@ -718,7 +718,7 @@ def page_live():
                                  line=dict(width=0), name="지역 최저~최고", hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=sel["date"], y=sel["price_krw_kg"], name="평균", line=dict(color=ACTUAL, width=2)))
         fig.update_yaxes(title="원/kg")
-        st.plotly_chart(layout(fig, f"{item} 일별 소비자가", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, f"{item} 일별 소비자가", 340), width="stretch")
     with r:
         mi = pm[(pm["kind"] == kd) & (pm["item"] == item)]
         fig = go.Figure()
@@ -726,7 +726,7 @@ def page_live():
             fig.add_trace(go.Scatter(x=d["month"], y=(d["price_krw_kg"] / d["normal_krw_kg"] - 1) * 100, name=f"등급 {g}"))
         fig.add_hline(y=0, line_dash="dot", line_color=GRAY)
         fig.update_yaxes(title="평년 대비 %")
-        st.plotly_chart(layout(fig, f"{item} 월별 평년 대비", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, f"{item} 월별 평년 대비", 340), width="stretch")
 
     # ---- 국산 vs 수입 가격 격차
     pair = ("삼겹살", "삼겹살") if species == "pork" else ("갈비", "갈비(냉동)")
@@ -737,7 +737,7 @@ def page_live():
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=both.index, y=both["국산"], name=f"국산 {pair[0]}", line=dict(color=ACTUAL)))
         fig.add_trace(go.Scatter(x=both.index, y=both["수입"], name=f"수입 {pair[1]}", line=dict(color=FILEFC)))
-        st.plotly_chart(layout(fig, "국산 vs 수입 소비자가 (원/kg)", 300), use_container_width=True)
+        st.plotly_chart(layout(fig, "국산 vs 수입 소비자가 (원/kg)", 300), width="stretch")
         ratio = both["국산"].iloc[-1] / both["수입"].iloc[-1]
         live_notes.append(("ok", f"국산 {pair[0]}은 수입 {pair[1]}의 **{ratio:.2f}배** 가격입니다 (격차가 클수록 수입 수요 유인이 큽니다)."))
 
@@ -752,14 +752,14 @@ def page_live():
         fig.add_trace(go.Scatter(x=a["date"], y=a["han_krw_kg"], name="한우 경락가", line=dict(color=ACTUAL, width=2)))
         fig.add_trace(go.Scatter(x=a["date"], y=a["yuk_krw_kg"], name="육우 경락가", line=dict(color=FILEFC, width=2)))
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, title="박스"))
-        st.plotly_chart(layout(fig, f"소 {cut} 경락가 (원/kg, 전 도매시장 평균)", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, f"소 {cut} 경락가 (원/kg, 전 도매시장 평균)", 340), width="stretch")
     else:
         a = ap[ap["grade"] == "평균"].sort_values("date")
         fig = go.Figure()
         fig.add_trace(go.Bar(x=a["date"], y=a["heads"], name="거래 두수", marker_color="rgba(137,135,129,0.35)", yaxis="y2"))
         fig.add_trace(go.Scatter(x=a["date"], y=a["price_krw_kg"], name="평균 경락가", line=dict(color=ACTUAL, width=2)))
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, title="두수"))
-        st.plotly_chart(layout(fig, "제주 돼지도체 경락가 (원/kg, 지육)", 340), use_container_width=True)
+        st.plotly_chart(layout(fig, "제주 돼지도체 경락가 (원/kg, 지육)", 340), width="stretch")
         st.caption("돼지 경락가는 제주 지역만 제공됩니다. 전국 시세의 대표값으로 쓰기에는 한계가 있습니다.")
 
     # ---- 인사이트

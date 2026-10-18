@@ -5,7 +5,6 @@ import math
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from lib import company as C
 from lib import orders as O
@@ -50,7 +49,7 @@ def _order_editor(data, proj, settings) -> pd.DataFrame:
     if order.empty:
         st.success("발주 검토량이 있는 원료가 없습니다.")
         return order
-    edited = st.data_editor(order, hide_index=True, use_container_width=True, key=f"orders_edit_{P.fingerprint(data)}_{use_spot}",
+    edited = st.data_editor(order, hide_index=True, width="stretch", key=f"orders_edit_{P.fingerprint(data)}_{use_spot}",
                             disabled=[c for c in order.columns if c not in EDITABLE],
                             column_order=["포함", "구분", "상태", "원료", "공급처", "발주량_kg", "계산량_kg", "납품요청일", "발주기한", "단가_원kg", "금액_원",
                                           "단가_USDkg", "금액_USD", "비고"],
@@ -93,7 +92,7 @@ def _thaw_editor(data, settings) -> pd.DataFrame:
                             format_func=md, key="orders_thaw_span")
     ev = tp.events[(tp.events["해동시작일"] >= span[0]) & (tp.events["해동시작일"] <= span[1])].copy()
     ev.insert(0, "투입 완료", False)
-    edited = st.data_editor(ev, hide_index=True, use_container_width=True, key=f"orders_thaw_{P.fingerprint(data)}_{span[0]}_{span[1]}",
+    edited = st.data_editor(ev, hide_index=True, width="stretch", key=f"orders_thaw_{P.fingerprint(data)}_{span[0]}_{span[1]}",
                             disabled=[c for c in ev.columns if c != "투입 완료"],
                             column_order=["투입 완료", "해동시작일", "원료", "로트", "냉동투입_kg", "해동후_kg", "사용일", "대기일수", "상태"],
                             column_config={"해동시작일": st.column_config.DateColumn(format="MM/DD"), "사용일": st.column_config.DateColumn(format="MM/DD"),
@@ -145,10 +144,10 @@ def render_orders(k: float, layout) -> None:
     if UC.render_lock("현장 지시서"):
         return
     left, right, _ = st.columns([2, 2, 4])
-    if left.button("샘플(가짜) 데이터로 시험", key="orders_sample", use_container_width=True):
+    if left.button("샘플(가짜) 데이터로 시험", key="orders_sample", width="stretch"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="orders_saved", use_container_width=True):
+    if right.button("올려 둔 파일 사용", key="orders_saved", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     data, label = UC.current_company()
@@ -181,16 +180,16 @@ def render_orders(k: float, layout) -> None:
     order_doc = order if len(order) else pd.DataFrame(columns=O.COLUMNS)
     a, b, c = st.columns(3)
     a.download_button("발주서·해동 지시서 (엑셀)", O.workbook(order_doc, thaw_doc, meta), file_name=f"현장지시서_{C.today_kst():%Y%m%d}.xlsx",
-                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="orders_xlsx")
+                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="orders_xlsx")
     page = O.print_html(order_doc, thaw_doc, meta)
     b.download_button("인쇄용 지시서 (HTML)", page.encode("utf-8"), file_name=f"현장지시서_{C.today_kst():%Y%m%d}.html", mime="text/html",
-                      use_container_width=True, key="orders_html")
+                      width="stretch", key="orders_html")
     add = O.inbound_rows(order_doc)
     c.download_button("입고예정 추가용 행 (CSV)", add.to_csv(index=False).encode("utf-8-sig"), file_name="입고예정_추가.csv", mime="text/csv",
-                      use_container_width=True, key="orders_inbound", disabled=add.empty,
+                      width="stretch", key="orders_inbound", disabled=add.empty,
                       help="발주가 확정되면 이 행을 입고예정.csv에 붙여 다시 올리세요. 원본은 자동으로 바뀌지 않습니다.")
     with st.expander("인쇄 미리보기", expanded=False):
-        components.html(page, height=640, scrolling=True)
+        st.iframe(page, height=640, alt="현장 지시서 인쇄 미리보기")  # 직접 만든 HTML(입력 글자는 모두 이스케이프)만 넣는다
         st.caption("미리보기 안의 '인쇄' 버튼은 지시서만 인쇄합니다(A4).")
 
     st.markdown("#### 4. 완료 기록 → 조치 이력")
@@ -201,7 +200,7 @@ def render_orders(k: float, layout) -> None:
     owner = st.text_input("기록하는 사람(역할)", key="orders_owner", placeholder="예: 생산관리 담당")
     x, y = st.columns(2)
     sel = O.selected(order_doc)
-    if x.button(f"포함한 발주 {len(sel)}건을 '발주 완료'로 기록", disabled=sel.empty, use_container_width=True, key="orders_done"):
+    if x.button(f"포함한 발주 {len(sel)}건을 '발주 완료'로 기록", disabled=sel.empty, width="stretch", key="orders_done"):
         if not owner.strip():
             st.error("기록하는 사람(역할)을 적어 주세요.")
         else:
@@ -217,7 +216,7 @@ def render_orders(k: float, layout) -> None:
     st.toggle("발주 완료 기록을 입고 예정(미반영)으로 계산에 넣기", key="apply_pending",
               help="같은 원료를 다음 날 또 발주필요로 띄우지 않기 위한 임시 반영입니다. 원본 CSV는 바뀌지 않습니다.")
     done = thaw[thaw["투입 완료"]] if len(thaw) else thaw
-    if y.button(f"체크한 해동 투입 {len(done)}건 기록", disabled=len(done) == 0, use_container_width=True, key="thaw_done"):
+    if y.button(f"체크한 해동 투입 {len(done)}건 기록", disabled=len(done) == 0, width="stretch", key="thaw_done"):
         if not owner.strip():
             st.error("기록하는 사람(역할)을 적어 주세요.")
         else:

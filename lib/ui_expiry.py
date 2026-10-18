@@ -81,10 +81,10 @@ def render_expiry(k: float, layout) -> None:
     if UC.render_lock("소비기한"):
         return
     left, right, _ = st.columns([2, 2, 4])
-    if left.button("샘플(가짜) 데이터로 시험", key="exp_sample", use_container_width=True):
+    if left.button("샘플(가짜) 데이터로 시험", key="exp_sample", width="stretch"):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if right.button("올려 둔 파일 사용", key="exp_saved", use_container_width=True):
+    if right.button("올려 둔 파일 사용", key="exp_saved", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     settings = UC.get_settings()
@@ -126,11 +126,11 @@ def render_expiry(k: float, layout) -> None:
         "폐기 예상": ex.lots["폐기예상_kg"].map(lambda v: f"{v:,.0f}kg" if v > 0.5 else "-"),
         "손실": ex.lots["손실_원"].map(lambda v: won_big(v) if v == v and v > 0.5 else "-"),
     })
-    st.dataframe(shown, hide_index=True, use_container_width=True)
+    st.dataframe(shown, hide_index=True, width="stretch")
     st.caption("유효 기한 = 사용기한, 미입력은 가정 기한, 이미 해동 중인 냉동 로트는 해동 후 보관 한도 중 이른 날. "
                "60일 소요량(명시된 계획 + 계획 뒤 하루 평균)을 기한이 빠른 로트부터 쓴다고 보고, 기한일에 남는 양을 폐기 예상으로 봅니다. 수량은 매입(냉동) 무게입니다.")
     if (ex.lots["상태"] == "폐기 예상").any() or (ex.lots["상태"] == "임박").any():
-        st.plotly_chart(_chart(ex, layout), use_container_width=True)
+        st.plotly_chart(_chart(ex, layout), width="stretch")
 
     st.markdown("#### 2. 폐기 예상 줄이기")
     if w.empty:
@@ -153,7 +153,7 @@ def render_expiry(k: float, layout) -> None:
         "생산 부족 변화": [f"{r['생산 부족 변화']:+,.0f}kg" if abs(r["생산 부족 변화"]) >= 0.5 else "변화 없음" for r in rows],
         "계획량 변화": [f"{r['계획량 변화']:+,.0f}kg" if abs(r["계획량 변화"]) >= 0.5 else "-" for r in rows],
     })
-    st.dataframe(tab, hide_index=True, use_container_width=True)
+    st.dataframe(tab, hide_index=True, width="stretch")
     st.caption("생산 부족이 늘어나는 안은 다른 원료를 끌어 써서 다른 계획을 못 만들게 된다는 뜻입니다. 폐기 손실이 줄어도 그대로 실행하기 어렵습니다.")
     for f, r in zip(fixes, rows):
         with st.expander(f.name + (" · 생산 부족 늘어남" if r["생산 부족 변화"] > 0.5 else "")):

@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.65  # st.iframe, width='stretch' (use_container_width·components.v1.html 대체)
 plotly
 pandas
 numpy

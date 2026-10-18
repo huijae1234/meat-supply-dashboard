@@ -167,7 +167,7 @@ def _price_block(m: A.Market) -> None:
     p["평년 대비"] = p["gap_pct"].map(vs_year)
     p["한 달 변화"] = p["chg30_pct"].map(change_text)
     st.dataframe(p.rename(columns={"종류": "구분", "item": "부위", "streak": "추세"})[["구분", "부위", "최근 가격", "평년 대비", "한 달 변화", "추세"]],
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
     st.caption("소비자가 기준이라 우리 매입 단가와 다릅니다. 방향(오르는 중인지)을 보는 참고용입니다.")
 
 
@@ -221,14 +221,14 @@ def render_company(k: float, layout) -> None:
 
     top = st.columns([2, 2, 2])
     # 상태를 바꾼 뒤에는 화면을 다시 그린다 ('오늘의 현황'이 이 화면보다 먼저 그려지기 때문)
-    if top[0].button("샘플(가짜) 데이터로 시험", use_container_width=True, help="날짜는 오늘 기준으로 만든 설명용 가짜 숫자입니다. 파일을 저장하지 않습니다."):
+    if top[0].button("샘플(가짜) 데이터로 시험", width="stretch", help="날짜는 오늘 기준으로 만든 설명용 가짜 숫자입니다. 파일을 저장하지 않습니다."):
         st.session_state["co_source"] = "sample"
         st.rerun()
-    if top[1].button("올려 둔 파일 사용", use_container_width=True):
+    if top[1].button("올려 둔 파일 사용", width="stretch"):
         st.session_state["co_source"] = "saved"
         st.rerun()
     confirm_clear = st.checkbox("저장한 원본 CSV 삭제에 동의합니다 (설정·조치 이력은 유지)")
-    if top[2].button("저장된 파일 지우기", use_container_width=True, disabled=not confirm_clear):
+    if top[2].button("저장된 파일 지우기", width="stretch", disabled=not confirm_clear):
         n = C.clear_saved()
         st.session_state["co_source"] = "saved"
         for kind in C.FILES:
@@ -297,7 +297,7 @@ def render_company(k: float, layout) -> None:
     if data.issues:
         with st.expander(f"데이터 점검 {len(data.issues)}건", expanded=any(i.level == '오류' for i in data.issues)):
             st.dataframe(pd.DataFrame([vars(i) for i in data.issues]).rename(columns={"level": "구분", "file": "파일", "message": "내용"}),
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width="stretch")
     if not data.ready():
         st.error("필수 파일(재고, 생산계획, 배합표)이 모두 올바르게 올라와야 계산합니다. 위 점검 내용을 확인하세요.")
         return
@@ -324,7 +324,7 @@ def render_company(k: float, layout) -> None:
         amount = K.material_amounts(data, proj, "next", settings=get_settings()).set_index("원료")["발주금액"]
         table.insert(table.columns.get_loc("발주량(참고)") + 1, "발주 금액(참고)",
                      s["원료"].map(amount).map(lambda v: won_big(v) if v == v and v > 0 else "-").values)
-    st.dataframe(table, hide_index=True, use_container_width=True)
+    st.dataframe(table, hide_index=True, width="stretch")
     if K.has_prices(data):
         st.caption("발주 금액은 입고 예정 단가(없으면 로트 평균) 기준 참고값입니다. 제품별 원료비와 단가 변동 영향은 '원가 영향' 화면에서 봅니다.")
 
@@ -344,7 +344,7 @@ def render_company(k: float, layout) -> None:
                                  marker=dict(color=theme.INK2, size=10, symbol="triangle-up")))
     fig.add_hline(y=0, line_color=theme.STATUS["critical"], line_width=1)
     fig.update_yaxes(title="톤")
-    st.plotly_chart(layout(fig, f"{pick} 예상 재고", 380), use_container_width=True)
+    st.plotly_chart(layout(fig, f"{pick} 예상 재고", 380), width="stretch")
     st.caption("파란 선이 주황 점선(안전재고) 아래로 내려가면 부족 위험, 0 아래(빨간 선)로 내려가면 소진입니다. 신규 발주는 반영하지 않은 예상입니다.")
 
     with st.expander("계산 가정"):

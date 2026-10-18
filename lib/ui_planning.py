@@ -22,9 +22,14 @@ def show_impact(data, compact=False):
     cols[1].metric("계획 대비 부족량", f"{m['생산부족_kg']:,.0f} kg")
     cols[2].metric("영향받는 생산계획", f"{m['영향계획건수']}건")
     table = result.orders
-    if compact:
-        table = table[table["부족량_kg"] > 1e-6].head(8)
-    st.dataframe(table, hide_index=True, use_container_width=True)
+    if compact:  # 오늘 화면용 요약: 부족한 계획만, 날짜·kg로 읽기 쉽게
+        from lib.plain import md
+        t = table[table["부족량_kg"] > 1e-6].head(8)
+        kg = lambda v: f"{v:,.0f}kg"  # noqa: E731
+        table = pd.DataFrame({"날짜": t["날짜"].map(md), "제품": t["제품"], "주문번호": t["주문번호"], "계획": t["계획물량_kg"].map(kg),
+                              "만들 수 있는 양": t["생산가능_kg"].map(kg), "부족": t["부족량_kg"].map(kg), "부족 원인": t["부족원료"],
+                              "납기": t["납기"].map(md), "납기 상태": t["납기상태"]})
+    st.dataframe(table, hide_index=True, width="stretch")
     st.caption("명시된 계획만 계산합니다. 당일 우선순위(작은 숫자 우선) → 납기 → 원본 행 순서로 원료를 배분합니다. 부족분은 이후 날짜로 자동 이월하지 않습니다.")
     st.caption("납기 위험은 원료 부족 또는 계획일이 납기보다 늦은 경우입니다. 실제 납품 지연일을 예측한 값은 아닙니다. 사용기한이 빠른 로트부터 사용합니다.")
     if m.get("능력부족_kg", 0) > 0.5:
@@ -42,7 +47,7 @@ def _capacity_settings(data, saved) -> None:
         a, b = st.columns(2)
         with a:
             st.markdown("**제품 → 라인**")
-            t1 = st.data_editor(t1, hide_index=True, use_container_width=True, disabled=["제품"], key=f"cap_lines_{P.fingerprint(data)}")
+            t1 = st.data_editor(t1, hide_index=True, width="stretch", disabled=["제품"], key=f"cap_lines_{P.fingerprint(data)}")
             if "라인" in data.plan:
                 st.caption("생산계획에 '라인' 열이 있으면 그 값이 이 표보다 우선합니다.")
         names = sorted({str(v).strip() for v in t1["라인"] if str(v).strip() not in ("", "nan", "None")} | set(saved.line_capacity)
@@ -50,7 +55,7 @@ def _capacity_settings(data, saved) -> None:
         t2 = pd.DataFrame({"라인": names, "하루 최대(kg)": [float(saved.line_capacity.get(n, 0)) for n in names]})
         with b:
             st.markdown("**라인 하루 최대 생산량**")
-            t2 = st.data_editor(t2, hide_index=True, use_container_width=True, disabled=["라인"], key=f"cap_caps_{'|'.join(names)}",
+            t2 = st.data_editor(t2, hide_index=True, width="stretch", disabled=["라인"], key=f"cap_caps_{'|'.join(names)}",
                                 column_config={"하루 최대(kg)": st.column_config.NumberColumn(min_value=0.0, step=100.0, format="%,.0f")})
             st.caption("0이면 제한 없음. 작업일은 '해동 계획'의 투입 요일·휴무일을 함께 씁니다.")
         shift = st.number_input("넘치는 양을 앞뒤 몇 작업일까지 옮길까요", 0, 14, int(saved.shift_days), key="cap_shift")
@@ -90,13 +95,13 @@ def _capacity_section(data, settings) -> None:
         return
     st.dataframe(pd.DataFrame({"라인": over["라인"], "날짜": over["날짜"].dt.strftime("%m/%d"), "계획량": over["계획량_kg"].map(lambda v: f"{v:,.0f}kg"),
                                "하루 능력": over["능력_kg"].map(lambda v: f"{v:,.0f}kg"), "넘는 양": over["초과_kg"].map(lambda v: f"{v:,.0f}kg")}),
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
     lv = Q.level(data, settings)
     if len(lv.moves):
         st.markdown("**나눈 안** — 납기 안에서 앞당기기를 먼저(그날까지 원료가 들어와 있어야 함), 안 되면 뒤로 미룹니다.")
         st.dataframe(pd.DataFrame({"원래 날짜": lv.moves["원래날짜"].dt.strftime("%m/%d"), "제품": lv.moves["제품"], "주문번호": lv.moves["주문번호"],
                                    "옮긴 날짜": lv.moves["옮긴날짜"].dt.strftime("%m/%d"), "물량": lv.moves["물량_kg"].map(lambda v: f"{v:,.0f}kg"),
-                                   "방향": lv.moves["방향"], "납기": lv.moves["납기상태"]}), hide_index=True, use_container_width=True)
+                                   "방향": lv.moves["방향"], "납기": lv.moves["납기상태"]}), hide_index=True, width="stretch")
     if len(lv.overflow):
         st.warning("옮길 곳이 없어 능력을 넘는 날: " + ", ".join(f"{r['날짜']:%m/%d} {r['라인']} {r['초과_kg']:,.0f}kg" for _, r in lv.overflow.iterrows())
                    + f". 앞뒤 {settings.shift_days}작업일 안에 남은 능력이 없습니다(옮길 범위를 늘리거나 감산·잔업을 검토).")
@@ -195,7 +200,7 @@ def _auto_candidates(data, settings) -> dict:
         "합계(참고)": table["합계"].map(_won), "확인할 점": table["경고"],
     })
     if table is not None:
-        st.dataframe(shown, hide_index=True, use_container_width=True)
+        st.dataframe(shown, hide_index=True, width="stretch")
     if table is None:
         pass
     elif table["합계"].isna().all():
@@ -241,17 +246,17 @@ def render_planning():
     name = st.text_input("대응안 이름", seed if seed != "감산 수용" else "입고 일정 조정 검토", key=f"scenario_name_{seed}")
     sig = P.fingerprint(data) + "_" + P.fingerprint(base_data)
     with st.expander("생산계획 편집 · 날짜·수량·납기·우선순위", expanded=True):
-        plan = st.data_editor(base_data.plan, num_rows="fixed", use_container_width=True, hide_index=True,
+        plan = st.data_editor(base_data.plan, num_rows="fixed", width="stretch", hide_index=True,
                               disabled=["제품", "주문번호"], key=f"plan_edit_{sig}")
     with st.expander("입고 예정 편집 · 추가 확보 물량도 여기에 입력", expanded=True):
         inbound = base_data.inbound
         if inbound is None:
             inbound = pd.DataFrame(columns=C.REQUIRED["inbound"] + ["보관", "공급처", "사용상태", "사용가능일", "사용기한"])
-        inbound = st.data_editor(inbound, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"inbound_edit_{sig}",
+        inbound = st.data_editor(inbound, num_rows="dynamic", hide_index=True, width="stretch", key=f"inbound_edit_{sig}",
                                 column_config={"보관": st.column_config.SelectboxColumn(options=["냉장", "냉동"]),
                                                "사용상태": st.column_config.SelectboxColumn(options=["사용가능", "검사대기", "사용보류"], default="사용가능")})
     with st.expander("배합표 편집 · 대체 배합", expanded=seed == "대체 원료"):
-        recipe = st.data_editor(base_data.recipe, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"recipe_edit_{sig}",
+        recipe = st.data_editor(base_data.recipe, num_rows="dynamic", hide_index=True, width="stretch", key=f"recipe_edit_{sig}",
                                 column_config={"보관": st.column_config.SelectboxColumn(options=["냉장", "냉동"]),
                                                "원산지": st.column_config.SelectboxColumn(options=["국산", "수입"])})
         st.caption("대체 배합은 '제품명 (대체)'처럼 새 제품으로 두고 생산계획의 해당 날짜만 그 제품으로 바꾸면 원래 배합과 섞이지 않습니다.")
@@ -271,7 +276,7 @@ def render_planning():
     for m in (m0, m1):
         m["합계"] = m["감산손실"] + m["위약금"] + m["추가비용"]
     money_rows = pd.DataFrame([{"지표": f"{k}_원", "기존": m0[k], "대응안": m1[k], "변화": m1[k] - m0[k]} for k in ("감산손실", "위약금", "추가비용", "합계")])
-    st.dataframe(pd.concat([table, money_rows], ignore_index=True), hide_index=True, use_container_width=True)
+    st.dataframe(pd.concat([table, money_rows], ignore_index=True), hide_index=True, width="stretch")
     st.caption("같은 종료일까지 비교합니다. 생산량을 줄여 부족이 사라진 경우는 개선으로 단정할 수 없습니다. 아래 주문별 계획량·납기를 함께 확인하세요. "
                "감산손실은 공헌이익(판매가 − 원료비) 기준입니다. 추가비용 = 늘어난 입고의 단가 할증분(입고 행의 단가_원kg − 재구매 단가) + 배합 변경으로 바뀐 원료비. "
                "입고 행에 단가를 안 적으면 할증 0으로 봅니다.")
@@ -279,7 +284,7 @@ def render_planning():
         st.warning("대응안에서 총 계획량이 변경되었습니다. 감산·증산과 원료 확보 효과를 구분하세요.")
     changes = before.orders.set_index("계획행")[["주문번호", "제품", "날짜", "납기", "계획물량_kg", "생산가능_kg", "부족량_kg", "납기상태"]].join(
         after.orders.set_index("계획행")[["날짜", "계획물량_kg", "생산가능_kg", "부족량_kg", "납기상태"]], rsuffix="(대응안)")
-    st.dataframe(changes, use_container_width=True)
+    st.dataframe(changes, width="stretch")
     with st.expander("원료별 사용 가능 잔량·미충족 소요"):
         st.dataframe(after.materials, hide_index=True)
         st.caption("미충족 소요는 생산하지 못한 제품에 대응하는 투입량입니다. 해당 원료 자체가 모두 부족하다는 뜻은 아닙니다.")
