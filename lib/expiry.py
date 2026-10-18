@@ -4,7 +4,7 @@
   - '원료 소요·재고'와 같은 60일 소요량(명시된 계획 + 계획 뒤 하루 평균)을 로트 단위로 다시 돌린다.
   - 로트의 기한(아래 '유효 기한')이 빠른 것부터 쓰고, 유효 기한일이 끝날 때 남은 양을 폐기 예상으로 본다. 그 뒤 소요는 다른 로트에서 쓴다.
   - 유효 기한 = 사용기한(입력)
-                사용기한 미입력은 들어온 날(재고는 기준일)부터 가정 일수(기본 냉장 10일·냉동 365일)  -- '기한 가정' 표시, 경고에만 쓴다
+                사용기한 미입력은 들어온 날(재고는 입고일, 없으면 기준일)부터 가정 일수(기본 냉장 10일·냉동 365일)  -- '기한 가정' 표시, 경고에만 쓴다
                 이미 해동 중인 냉동 로트(사용가능일 입력)는 해동 완료일 + 해동 후 보관 한도도 함께 본다(더 이른 날)
   - 검사대기·사용보류 로트는 쓰지 않으므로 기한 안에 상태가 바뀌지 않으면 전량 폐기 위험으로 따로 표시한다.
   - 수량은 매입(냉동) 무게로 보여 준다. 손실 = 폐기 예상 × (로트 단가, 없으면 원료 평균 단가 + 폐기 처리비).
@@ -45,8 +45,12 @@ def _effective(lot: dict, base: pd.Timestamp, st_: C.Settings) -> tuple[pd.Times
     if pd.notna(lot["expires"]):
         exp, why = pd.Timestamp(lot["expires"]), "입력"
     else:
-        start = base if lot["kind"] == "inventory" else lot["arrival"]
-        exp, why = start + pd.Timedelta(days=int(st_.shelf[storage])), f"가정({st_.shelf[storage]}일)"
+        if lot["kind"] == "inventory":
+            received = lot.get("received")
+            start, since = (pd.Timestamp(received), "입고일부터") if received is not None else (base, "기준일부터")
+        else:
+            start, since = lot["arrival"], "입고 예정일부터"
+        exp, why = start + pd.Timedelta(days=int(st_.shelf[storage])), f"가정({st_.shelf[storage]}일, {since})"
     if storage == "냉동" and lot["explicit_ready"] and lot["thaw_days"]:
         thawed = pd.Timestamp(lot["ready"]) + pd.Timedelta(days=int(st_.thaw_hold))
         if thawed <= exp:  # material_lots가 이미 이 한도를 사용기한에 넣었다(근거만 표시)

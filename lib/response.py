@@ -223,23 +223,39 @@ def spot_candidate(data: C.CompanyData, base: P.Feasibility, settings: C.Setting
 
 
 def delay_candidate(data: C.CompanyData, base: P.Feasibility, settings: C.Settings | None) -> Candidate | None:
-    """부족이 난 계획 행을 부족 원료가 다음에 쓸 수 있게 되는 날로 옮긴다(해동 완료·입고)."""
+    """원료가 모자라 부족이 난 계획 행을, 그 제품의 원료가 '모두' 들어와 있는 가장 가까운 작업일로 옮긴다(입고·해동 완료, 기한 안).
+
+    부족 원료 하나만 보고 옮기면, 그날 다른 원료가 없거나 기한이 지나 또 부족이 날 수 있어 제품의 원료 전부를 확인한다.
+    라인 능력 때문에만 부족한 행은 '생산 능력 맞춰 나누기' 후보가 다룬다.
+    """
     short = _shortage(base)
     if short.empty:
         return None
+    st_ = settings or C.Settings()
     labels = _label_keys(data)
-    lots = [l for l in C.material_lots(data, settings) if l["status"] == "사용가능" and l["qty"] > 0]
+    ok = Q.material_check(data, st_)
     plan = data.plan.copy()
     notes, moved, stuck = [], 0, []
+    lots = [l for l in C.material_lots(data, st_) if l["status"] == "사용가능" and l["qty"] > 0]
     for _, o in short.iterrows():
         keys = [labels[x.strip()] for x in o["부족원료"].split(",") if x.strip() in labels]
-        target = None
+        if not keys:
+            continue  # 능력 부족만 있는 행
+        # ① 부족 원료가 새로 들어오는(입고·해동 완료) 날 이후부터 ② 제품 원료가 모두 갖춰진 첫 작업일
+        start = None
         for key in keys:
             later = [l["ready"] for l in lots if l["key"] == key and l["ready"] > o["날짜"] and l["ready"] != pd.Timestamp.max]
             if not later:
-                target = None
+                start = None
                 break
-            target = max(target, min(later)) if target is not None else min(later)
+            start = max(start, min(later)) if start is not None else min(later)
+        target = None
+        if start is not None:
+            for i in range(0, 61):
+                d = start + pd.Timedelta(days=i)
+                if st_.can_start(d) and ok(o["제품"], d):
+                    target = d
+                    break
         if target is None:
             stuck.append(f"{o['제품']} {o['날짜']:%m/%d}")
             continue
@@ -250,7 +266,7 @@ def delay_candidate(data: C.CompanyData, base: P.Feasibility, settings: C.Settin
     if not moved:
         return None
     if stuck:
-        notes.append("옮길 날짜가 없는 계획(다음 입고·해동이 없음): " + ", ".join(stuck[:6]) + (" 외" if len(stuck) > 6 else ""))
+        notes.append("새 입고 뒤 60일 안에 원료가 모두 갖춰지는 작업일이 없어 옮기지 못한 계획: " + ", ".join(stuck[:6]) + (" 외" if len(stuck) > 6 else ""))
     cand = P.change_scenario(data, plan=plan)
     cand.substitute, cand.supplier = data.substitute, data.supplier
     if Q.enabled(cand, settings):  # 옮긴 날이 라인 능력을 넘으면 앞뒤 작업일로 나눈다

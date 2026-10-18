@@ -17,7 +17,24 @@ from lib import company as C
 from lib import cost as K
 
 COLUMNS = ["포함", "구분", "원료", "상태", "공급처", "발주량_kg", "계산량_kg", "납품요청일", "발주기한", "단가_원kg", "금액_원", "비고",
-           "육종", "부위", "원산지", "보관"]
+           "육종", "부위", "원산지", "보관", "단가_USDkg", "금액_USD", "적용환율"]
+
+
+def usd_rate() -> tuple[pd.Timestamp | None, float]:
+    from lib import fx
+    return fx.latest("USD")
+
+
+def usd_price(data: C.CompanyData, key: tuple, krw: float, rate: float) -> float:
+    """수입 원료의 USD 단가: 입고 예정에 적힌 단가_USDkg(가장 늦은 입고) → 없으면 원화 단가 ÷ 최신 매매기준율. 국산은 NaN."""
+    if key[2] != "수입":
+        return math.nan
+    inb = data.inbound
+    if inb is not None and "단가_USDkg" in inb:
+        i = inb[(inb[C.MATERIAL_KEY] == pd.Series(key, index=C.MATERIAL_KEY)).all(axis=1) & inb["단가_USDkg"].notna()]
+        if len(i):
+            return float(i.sort_values("입고예정일").iloc[-1]["단가_USDkg"])
+    return krw / rate if rate == rate and rate > 0 and krw == krw else math.nan
 
 
 def supplier_for(data: C.CompanyData, key: tuple) -> dict:
@@ -58,6 +75,7 @@ def draft(data: C.CompanyData, proj: C.Projection, settings: C.Settings | None =
     st_ = settings or C.Settings()
     price = K.unit_price(K.material_prices(data), "next") if K.has_prices(data) else {}
     rows = []
+    _, rate = usd_rate()
     for _, r in proj.summary.iterrows():
         qty = float(r["발주량_kg"]) if proj.actionable else 0.0
         if qty <= 0:
@@ -67,9 +85,11 @@ def draft(data: C.CompanyData, proj: C.Projection, settings: C.Settings | None =
         q, note = round_order(qty, sup["최소"], sup["단위"])
         due = r["가장빠른입고일"] if r["상태"] == "긴급" or pd.isna(r["발주기한"]) else r["발주기한"] + pd.Timedelta(days=int(r["리드타임일수"]))
         p = price.get(r["원료"], (math.nan, ""))[0]
+        usd = usd_price(data, key, p, rate)
         rows.append({"포함": r["상태"] in ("긴급", "발주필요"), "구분": "정규 발주", "원료": r["원료"], "상태": r["상태"], "공급처": sup["공급처"],
                      "발주량_kg": q, "계산량_kg": qty, "납품요청일": due, "발주기한": r["발주기한"], "단가_원kg": p, "금액_원": q * p,
-                     "비고": note, "육종": key[0], "부위": key[1], "원산지": key[2], "보관": key[3]})
+                     "비고": note, "육종": key[0], "부위": key[1], "원산지": key[2], "보관": key[3],
+                     "단가_USDkg": usd, "금액_USD": q * usd, "적용환율": rate if usd == usd else math.nan})
     return pd.DataFrame(rows, columns=COLUMNS)
 
 
@@ -77,6 +97,7 @@ def from_inbound(data: C.CompanyData, rows: pd.DataFrame, kind: str = "긴급 �
     """대응안에서 추가한 입고 행(예: 긴급 현물)을 발주서 행으로 바꾼다."""
     out = []
     today = C.today_kst()
+    _, rate = usd_rate()
     for _, r in rows.iterrows():
         key = tuple(r[c] for c in C.MATERIAL_KEY)
         sup = supplier_for(data, key)
@@ -85,13 +106,18 @@ def from_inbound(data: C.CompanyData, rows: pd.DataFrame, kind: str = "긴급 �
         out.append({"포함": True, "구분": kind, "원료": C.ingredient_label(*key), "상태": "대응안", "공급처": sup["공급처"] if sup["근거"] != "없음" else "긴급 현물 공급처(미지정)",
                     "발주량_kg": q, "계산량_kg": float(r["입고량_kg"]), "납품요청일": r["입고예정일"], "발주기한": today,
                     "단가_원kg": p, "금액_원": q * p, "비고": ", ".join(x for x in (note, "대응안 할증 단가(가정)") if x),
-                    "육종": key[0], "부위": key[1], "원산지": key[2], "보관": key[3]})
+                    "육종": key[0], "부위": key[1], "원산지": key[2], "보관": key[3],
+                    "단가_USDkg": (p / rate if key[2] == "수입" and rate == rate and p == p else math.nan),
+                    "금액_USD": (q * p / rate if key[2] == "수입" and rate == rate and p == p else math.nan),
+                    "적용환율": rate if key[2] == "수입" and rate == rate else math.nan})
     return pd.DataFrame(out, columns=COLUMNS)
 
 
 def selected(order: pd.DataFrame) -> pd.DataFrame:
     o = order[order["포함"].fillna(False).astype(bool) & (order["발주량_kg"].fillna(0) > 0)].copy()
     o["금액_원"] = o["발주량_kg"] * o["단가_원kg"]
+    if "단가_USDkg" in o:
+        o["금액_USD"] = o["발주량_kg"] * o["단가_USDkg"]
     return o
 
 
@@ -101,7 +127,8 @@ def inbound_rows(order: pd.DataFrame, today: pd.Timestamp | None = None) -> pd.D
     d = pd.Timestamp(today or C.today_kst()).normalize()
     return pd.DataFrame({"입고예정일": pd.to_datetime(o["납품요청일"]).dt.strftime("%Y-%m-%d"), "육종": o["육종"], "부위": o["부위"],
                          "원산지": o["원산지"], "보관": o["보관"], "입고량_kg": o["발주량_kg"], "발주일": f"{d:%Y-%m-%d}",
-                         "공급처": o["공급처"], "단가_원kg": o["단가_원kg"], "사용상태": "사용가능"})
+                         "공급처": o["공급처"], "단가_원kg": o["단가_원kg"],
+                         "단가_USDkg": o["단가_USDkg"] if "단가_USDkg" in o else math.nan, "사용상태": "사용가능"})
 
 
 def _sheet_name(name: str, used: set) -> str:
@@ -131,7 +158,7 @@ def workbook(order: pd.DataFrame, thaw: pd.DataFrame, meta: dict) -> bytes:
             cell = ws.cell(start_row, j, c)
             cell.font, cell.fill, cell.border = Font(bold=True), head, box
             cell.alignment = Alignment(horizontal="center", vertical="center")
-            ws.column_dimensions[get_column_letter(j)].width = widths[j - 1]
+            ws.column_dimensions[get_column_letter(j)].width = widths[j - 1] if j - 1 < len(widths) else 12
         for i, r in enumerate(rows, start_row + 1):
             for j, v in enumerate(r, 1):
                 cell = ws.cell(i, j, v)
@@ -153,16 +180,32 @@ def workbook(order: pd.DataFrame, thaw: pd.DataFrame, meta: dict) -> bytes:
         for i, (k, v) in enumerate(info, 3):
             ws.cell(i, 1, k).font = Font(bold=True)
             ws.cell(i, 2, v)
-        rows = [[r["원료"], float(r["발주량_kg"]), f"{pd.Timestamp(r['납품요청일']):%Y-%m-%d}",
-                 (float(r["단가_원kg"]) if pd.notna(r["단가_원kg"]) else None), (float(r["금액_원"]) if pd.notna(r["금액_원"]) else None),
-                 r["구분"], r["비고"]] for _, r in g.iterrows()]
-        end = table(ws, 3 + len(info) + 1, ["품목(육종 부위·원산지·보관)", "수량(kg)", "납품 요청일", "단가(원/kg)", "금액(원)", "구분", "비고"], rows,
-                    [30, 12, 14, 13, 15, 16, 30])
+        usd = "단가_USDkg" in g and g["단가_USDkg"].notna().any()
+        if usd:
+            r0 = g.loc[g["적용환율"].notna(), "적용환율"]
+            fxd = meta.get("환율일", "")
+            info.append(("적용 환율", f"USD {float(r0.iloc[0]):,.2f}원 ({fxd} 매매기준율, 참고)" if len(r0) else "-"))
+            for i, (k, v) in enumerate(info[-1:], 3 + len(info) - 1):
+                ws.cell(i, 1, k).font = Font(bold=True)
+                ws.cell(i, 2, v)
+
+        def money(v, digits=0):
+            return round(float(v), digits) if pd.notna(v) else None
+        rows = [[r["원료"], float(r["발주량_kg"]), f"{pd.Timestamp(r['납품요청일']):%Y-%m-%d}", money(r["단가_원kg"]), money(r["금액_원"])]
+                + ([money(r["단가_USDkg"], 2), money(r["금액_USD"], 2)] if usd else []) + [r["구분"], r["비고"]] for _, r in g.iterrows()]
+        cols = ["품목(육종 부위·원산지·보관)", "수량(kg)", "납품 요청일", "단가(원/kg)", "금액(원)"] + (["단가(USD/kg)", "금액(USD)"] if usd else []) + ["구분", "비고"]
+        end = table(ws, 3 + len(info) + 1, cols, rows, [30, 12, 14, 13, 15] + ([13, 14] if usd else []) + [16, 30])
+        if usd:
+            for rr in range(3 + len(info) + 2, end):
+                ws.cell(rr, 6).number_format = ws.cell(rr, 7).number_format = "#,##0.00"
         ws.cell(end, 1, "합계").font = Font(bold=True)
         ws.cell(end, 2, float(g["발주량_kg"].sum())).number_format = "#,##0"
         if g["금액_원"].notna().all():
             ws.cell(end, 5, float(g["금액_원"].sum())).number_format = "#,##0"
-        ws.cell(end + 2, 1, "단가·금액은 참고값입니다. 최종 단가·납기는 공급처 확인 후 확정합니다.")
+        if usd and g["금액_USD"].notna().any():
+            ws.cell(end, 7, round(float(g["금액_USD"].sum()), 2)).number_format = "#,##0.00"
+        ws.cell(end + 2, 1, "단가·금액은 참고값입니다. 최종 단가·납기는 공급처 확인 후 확정합니다."
+                + (" USD는 입고 예정의 USD 단가 또는 원화 단가 ÷ 매매기준율이며, 실제 결제 환율과 다를 수 있습니다." if usd else ""))
     ws = wb.create_sheet(_sheet_name("해동 지시", used))
     ws["A1"] = "해동 지시서" + (" (샘플·가짜 데이터)" if sample else "")
     ws["A1"].font = Font(bold=True, size=16)
@@ -205,8 +248,11 @@ def print_html(order: pd.DataFrame, thaw: pd.DataFrame, meta: dict) -> str:
         for supplier, g in o.groupby("공급처", sort=True):
             parts.append(f"<h3>{e(str(supplier))}</h3><table><tr><th>품목</th><th>수량</th><th>납품 요청일</th><th>단가</th><th>금액</th><th>비고</th><th>확인</th></tr>")
             for _, r in g.iterrows():
+                has_usd = "단가_USDkg" in r and pd.notna(r["단가_USDkg"])
+                usd_p = f"<br><small>${float(r['단가_USDkg']):,.2f}</small>" if has_usd else ""
+                usd_a = f"<br><small>${float(r['금액_USD']):,.0f}</small>" if has_usd and pd.notna(r["금액_USD"]) else ""
                 parts.append(f"<tr><td>{e(r['원료'])}</td><td class='n'>{fmt(r['발주량_kg'], 'kg')}</td><td>{pd.Timestamp(r['납품요청일']):%m/%d}</td>"
-                             f"<td class='n'>{fmt(r['단가_원kg'], '원')}</td><td class='n'>{fmt(r['금액_원'], '원')}</td><td>{e(str(r['비고']))}</td><td class='chk'>□</td></tr>")
+                             f"<td class='n'>{fmt(r['단가_원kg'], '원')}{usd_p}</td><td class='n'>{fmt(r['금액_원'], '원')}{usd_a}</td><td>{e(str(r['비고']))}</td><td class='chk'>□</td></tr>")
             parts.append(f"<tr class='sum'><td>합계</td><td class='n'>{fmt(float(g['발주량_kg'].sum()), 'kg')}</td><td></td><td></td>"
                          f"<td class='n'>{fmt(float(g['금액_원'].sum()) if g['금액_원'].notna().all() else math.nan, '원')}</td><td></td><td></td></tr></table>")
     else:

@@ -52,11 +52,14 @@ def _order_editor(data, proj, settings) -> pd.DataFrame:
         return order
     edited = st.data_editor(order, hide_index=True, use_container_width=True, key=f"orders_edit_{P.fingerprint(data)}_{use_spot}",
                             disabled=[c for c in order.columns if c not in EDITABLE],
-                            column_order=["포함", "구분", "상태", "원료", "공급처", "발주량_kg", "계산량_kg", "납품요청일", "발주기한", "단가_원kg", "금액_원", "비고"],
+                            column_order=["포함", "구분", "상태", "원료", "공급처", "발주량_kg", "계산량_kg", "납품요청일", "발주기한", "단가_원kg", "금액_원",
+                                          "단가_USDkg", "금액_USD", "비고"],
                             column_config={"발주량_kg": st.column_config.NumberColumn(min_value=0.0, step=10.0, format="%,.0f"),
                                            "계산량_kg": st.column_config.NumberColumn(format="%,.0f"),
                                            "단가_원kg": st.column_config.NumberColumn(format="%,.0f"),
                                            "금액_원": st.column_config.NumberColumn("금액_원(편집 전)", format="%,.0f"),
+                                           "단가_USDkg": st.column_config.NumberColumn("단가_USD/kg", format="%.2f"),
+                                           "금액_USD": st.column_config.NumberColumn("금액_USD(편집 전)", format="%,.0f"),
                                            "납품요청일": st.column_config.DateColumn(format="YYYY-MM-DD"),
                                            "발주기한": st.column_config.DateColumn(format="YYYY-MM-DD")})
     sel = O.selected(edited)
@@ -69,7 +72,8 @@ def _order_editor(data, proj, settings) -> pd.DataFrame:
     if (sel["공급처"].astype(str).str.contains("미지정")).any():
         st.warning("공급처가 '미지정'인 발주가 있습니다. 공급처.csv를 올리거나 표에서 공급처를 적어 주세요.")
     st.caption("발주량은 '원료 소요·재고'의 발주 검토량을 공급처의 최소 발주량·발주 단위에 맞춰 올린 값입니다. "
-               "납품 요청일 = 긴급은 가장 빠른 입고일, 그 외는 발주 기한 + 리드타임. 표에서 포함·공급처·수량·납품일·비고를 고칠 수 있습니다.")
+               "납품 요청일 = 긴급은 가장 빠른 입고일, 그 외는 발주 기한 + 리드타임. 표에서 포함·공급처·수량·납품일·비고를 고칠 수 있습니다. "
+               "수입 원료는 USD 단가·금액도 보여 줍니다(입고 예정의 USD 단가, 없으면 원화 단가 ÷ 최신 매매기준율).")
     return edited
 
 
@@ -170,7 +174,8 @@ def render_orders(k: float, layout) -> None:
 
     st.markdown("#### 3. 내려받기·인쇄")
     who = st.text_input("작성자 (이름 대신 역할도 됩니다)", key="orders_author", placeholder="예: 생산관리 담당")
-    meta = {"발주일": f"{C.today_kst():%Y-%m-%d}", "기준일": f"{proj.base_date:%Y-%m-%d}", "작성자": who, "샘플": sample,
+    fx_day, _ = O.usd_rate()
+    meta = {"환율일": f"{fx_day:%Y-%m-%d}" if fx_day is not None else "", "발주일": f"{C.today_kst():%Y-%m-%d}", "기준일": f"{proj.base_date:%Y-%m-%d}", "작성자": who, "샘플": sample,
             "공급처정보": {} if data.supplier is None else {r["공급처"]: {"담당자": r["담당자"], "연락처": r["연락처"]} for _, r in data.supplier.iterrows()}}
     thaw_doc = thaw.drop(columns=["투입 완료"]) if len(thaw) else thaw
     order_doc = order if len(order) else pd.DataFrame(columns=O.COLUMNS)
@@ -202,7 +207,7 @@ def render_orders(k: float, layout) -> None:
         else:
             lines = [f"{r['공급처']} · {r['원료']} {r['발주량_kg']:,.0f}kg · 납품 요청 {pd.Timestamp(r['납품요청일']):%m/%d}" for _, r in sel.iterrows()]
             ctx = {"출처": label, "판단일": str(C.today_kst().date()), "종류": "발주 완료",
-                   "발주": sel.drop(columns=["포함"]).astype(str).to_dict(orient="records"),
+                   "발주": sel.drop(columns=["포함"]).astype(object).fillna("").astype(str).to_dict(orient="records"),
                    "입고추가": O.inbound_rows(sel).astype(object).where(O.inbound_rows(sel).notna(), None).to_dict(orient="records")}
             add_record(f"발주 완료: {sel['공급처'].nunique()}곳 {len(sel)}건", owner, C.today_kst().date(), "실행 완료", "\n".join(lines),
                        "입고예정.csv에 반영 필요(입고예정 추가용 행 내려받기)", ctx)
@@ -219,7 +224,7 @@ def render_orders(k: float, layout) -> None:
             lines = [f"{pd.Timestamp(r['해동시작일']):%m/%d} {r['원료']} 로트 {r['로트']} {r['냉동투입_kg']:,.0f}kg 투입 (사용 {pd.Timestamp(r['사용일']):%m/%d})"
                      for _, r in done.iterrows()]
             ctx = {"출처": label, "판단일": str(C.today_kst().date()), "종류": "해동 투입",
-                   "해동": done.drop(columns=["투입 완료"]).astype(str).to_dict(orient="records")}
+                   "해동": done.drop(columns=["투입 완료"]).astype(object).fillna("").astype(str).to_dict(orient="records")}
             add_record(f"해동 투입 완료: {len(done)}건", owner, C.today_kst().date(), "실행 완료", "\n".join(lines),
                        "재고 CSV의 사용가능일에 해동 완료일 반영 필요", ctx)
             st.success("조치 이력에 기록했습니다. 다음 업로드 때 해당 로트의 사용가능일을 적으면 계산에 반영됩니다.")

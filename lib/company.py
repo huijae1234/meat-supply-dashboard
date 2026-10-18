@@ -39,6 +39,7 @@ DEFAULT_THAW_HOLD = 2                            # 해동이 끝난 뒤 쓰기 �
 DEFAULT_SPOT_PREMIUM = 15.0                      # 긴급 현물 구매 단가 할증(%) (설명용 초기값)
 DEFAULT_SPOT_LEAD = {"국산": 1, "수입": 3}        # 긴급 현물이 들어오기까지 일수 (수입은 국내 재고 보유처 기준)
 DEFAULT_EXPIRY_WARN = {"냉장": 3, "냉동": 30}      # 사용기한까지 이 일수 이내면 '임박'
+SAMPLE_CAPACITY = {"햄 라인": 6000, "베이컨 라인": 1300, "탕류 라인": 1000, "양념육 라인": 500}  # 샘플 시연용 라인 능력(설정 파일에 저장하지 않음)
 DEFAULT_SHELF = {"냉장": 10, "냉동": 365}          # 사용기한을 안 적은 로트의 가정 기한(들어온 날부터, 재고는 기준일부터) — 경고에만 쓴다
 
 # 부위 목록: 현장 부위명 -> 시장 데이터 연결 키 (stock = 부위별 재고의 부위명, price = 소비자가 품목명)
@@ -74,9 +75,10 @@ PART_ALIASES = {"돼지": {"전지": "앞다리", "후지": "뒷다리", "목심
 ORIGIN_ALIASES = {"국내산": "국산", "국내": "국산", "domestic": "국산", "수입산": "수입", "import": "수입"}
 
 FILES = {"inventory": "재고.csv", "inbound": "입고예정.csv", "plan": "생산계획.csv", "recipe": "배합표.csv",
-         "substitute": "대체표.csv", "supplier": "공급처.csv"}
-FILE_LABELS = {"inventory": "재고", "inbound": "입고 예정", "plan": "생산계획", "recipe": "배합표", "substitute": "대체표", "supplier": "공급처"}
-OPTIONAL_FILES = ("inbound", "substitute", "supplier")  # 없어도 계산한다
+         "substitute": "대체표.csv", "supplier": "공급처.csv", "byproduct": "부산물.csv"}
+FILE_LABELS = {"inventory": "재고", "inbound": "입고 예정", "plan": "생산계획", "recipe": "배합표", "substitute": "대체표", "supplier": "공급처",
+               "byproduct": "부산물"}
+OPTIONAL_FILES = ("inbound", "substitute", "supplier", "byproduct")  # 없어도 계산한다
 REQUIRED = {
     "inventory": ["기준일", "육종", "부위", "원산지", "보관", "재고량_kg"],
     "inbound": ["입고예정일", "육종", "부위", "원산지", "입고량_kg"],
@@ -84,15 +86,17 @@ REQUIRED = {
     "recipe": ["제품", "육종", "부위", "원산지", "투입량_kg"],
     "substitute": ["제품", "육종", "부위", "원산지", "보관", "대체부위", "대체원산지", "대체보관"],
     "supplier": ["육종", "부위", "원산지", "보관", "공급처"],
+    "byproduct": ["육종", "부위", "원산지", "보관", "부산물률", "부산물단가_원kg"],
 }
 OPTIONAL = {
-    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률", "단가_USDkg"],
+    "inventory": ["안전재고일수", "리드타임일수", "발주주기일", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률", "단가_USDkg", "입고일"],
     "inbound": ["발주일", "공급처", "보관", "로트", "사용상태", "사용가능일", "사용기한", "단가_원kg", "해동일수", "해동감량률", "단가_USDkg"],
     "plan": ["주문번호", "납기", "우선순위", "판매가_원kg", "위약금_원kg", "라인"], "recipe": ["보관"],
     "substitute": ["대체육종", "최대대체비율", "환산계수", "비고"],
     "supplier": ["담당자", "연락처", "최소발주량_kg", "발주단위_kg", "우선순위"],
+    "byproduct": ["부산물명"],
 }
-MONEY_COLUMNS = ("단가_원kg", "판매가_원kg", "위약금_원kg", "단가_USDkg")  # 원/kg. 비어 있어도 되지만, 적었으면 0보다 큰 숫자여야 한다
+MONEY_COLUMNS = ("단가_원kg", "판매가_원kg", "위약금_원kg", "단가_USDkg", "부산물단가_원kg")  # 원/kg. 비어 있어도 되지만, 적었으면 0보다 큰 숫자여야 한다
 COLUMN_ALIASES = {"외화단가": "단가_USDkg", "USD단가": "단가_USDkg", "달러단가": "단가_USDkg", "단가USD": "단가_USDkg", "단가": "단가_원kg", "매입단가": "단가_원kg", "단가원": "단가_원kg", "단가원/kg": "단가_원kg",
                   "판매가": "판매가_원kg", "납품가": "판매가_원kg", "판매가원": "판매가_원kg", "판매가원/kg": "판매가_원kg"}
 MATERIAL_KEY = ["육종", "부위", "원산지", "보관"]
@@ -136,6 +140,7 @@ class CompanyData:
     recipe: pd.DataFrame | None = None
     substitute: pd.DataFrame | None = None
     supplier: pd.DataFrame | None = None
+    byproduct: pd.DataFrame | None = None
     issues: list[Issue] = field(default_factory=list)
 
     def ready(self) -> bool:
@@ -230,13 +235,16 @@ def clean_table(kind: str, raw: pd.DataFrame, issues: list[Issue]) -> pd.DataFra
         if (present & (df[c].isna() | ~np.isfinite(df[c]) | (df[c] < minimum) | (df[c] > maximum) | (df[c] % 1 != 0))).any():
             issues.append(Issue("오류", label, f"{c}는 {minimum}~{maximum} 범위의 정수여야 합니다"))
             return None
-    for c in [c for c in ("기준일", "입고예정일", "날짜", "발주일", "납기", "사용가능일", "사용기한") if c in df.columns]:
+    for c in [c for c in ("기준일", "입고예정일", "날짜", "발주일", "납기", "사용가능일", "사용기한", "입고일") if c in df.columns]:
         present = df[c].notna() & ~df[c].astype(str).isin(["", "nan", "None", "NaT", "<NA>"])
         parsed = pd.to_datetime(df[c], errors="coerce")
-        if (parsed.isna() & (present if c in ("발주일", "납기", "사용가능일", "사용기한") else True)).any():
+        if (parsed.isna() & (present if c in ("발주일", "납기", "사용가능일", "사용기한", "입고일") else True)).any():
             issues.append(Issue("오류", label, f"'{c}'의 날짜 형식이 올바르지 않습니다 (예: 2026-10-14)"))
             return None
         df[c] = parsed.dt.normalize()
+    if kind == "inventory" and "입고일" in df and (df["입고일"].notna() & (df["입고일"] > df["기준일"])).any():
+        issues.append(Issue("오류", label, "재고 로트의 입고일이 기준일보다 늦습니다(이미 들어와 있는 재고여야 합니다)"))
+        return None
     if kind in ("inventory", "inbound"):
         if "사용상태" not in df:
             df["사용상태"] = "사용가능"
@@ -266,6 +274,23 @@ def clean_table(kind: str, raw: pd.DataFrame, issues: list[Issue]) -> pd.DataFra
     if kind == "substitute":
         df = _clean_substitute(df, issues, label)
         if df is None:
+            return None
+    if kind == "byproduct":
+        if (df["보관"] == "").any():
+            issues.append(Issue("오류", label, "원료의 보관(냉장/냉동)을 적어 주세요"))
+            return None
+        rate = pd.to_numeric(df["부산물률"].astype(str).str.replace("%", "", regex=False), errors="coerce")
+        if rate.isna().any() or (rate <= 0).any() or (rate >= 100).any():
+            issues.append(Issue("오류", label, "부산물률은 0보다 크고 100보다 작은 숫자(%, 투입 원료 대비)여야 합니다"))
+            return None
+        df["부산물률"] = rate
+        if df["부산물단가_원kg"].isna().any():
+            issues.append(Issue("오류", label, "부산물단가_원kg를 모두 적어 주세요"))
+            return None
+        df["부산물명"] = df["부산물명"].replace({"nan": "", "None": ""}) if "부산물명" in df else ""
+        tot = df.groupby(MATERIAL_KEY)["부산물률"].sum()
+        if (tot >= 100).any():
+            issues.append(Issue("오류", label, "한 원료의 부산물률 합계가 100% 이상입니다"))
             return None
     if kind == "supplier":
         if (df["보관"] == "").any() or df["공급처"].isin(["", "nan", "None"]).any():
@@ -643,7 +668,8 @@ def material_lots(data: CompanyData, settings: Settings | None = None) -> list[d
                          "qty": float(r[qty]) * (1 - loss / 100), "frozen_qty": float(r[qty]), "ready": ready, "arrival": arrival,
                          "expires": expires, "status": r["사용상태"], "kind": kind,
                          "thaw_days": thaw_days, "loss": loss, "explicit_ready": bool(explicit),
-                         "price": float(r["단가_원kg"]) if "단가_원kg" in r and pd.notna(r["단가_원kg"]) else math.nan})
+                         "price": float(r["단가_원kg"]) if "단가_원kg" in r and pd.notna(r["단가_원kg"]) else math.nan,
+                         "received": r["입고일"] if kind == "inventory" and "입고일" in r and pd.notna(r["입고일"]) else None})
     return lots
 
 
@@ -868,6 +894,11 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
     plan["우선순위"] = 100
     plan["판매가_원kg"] = plan["제품"].map({"프레스햄": 9000, "소시지": 8500, "베이컨": 21000, "육개장": 9000, "양념갈비": 14000})
     plan["라인"] = plan["제품"].map({"프레스햄": "햄 라인", "소시지": "햄 라인", "베이컨": "베이컨 라인", "육개장": "탕류 라인", "양념갈비": "양념육 라인"})
+    # 급한 추가 주문 하나: 그날 햄 라인이 평소보다 몰린다(라인 능력 시연용). 납기 여유 4일, 덜 급한 우선순위
+    rush_day = days[2]
+    plan = pd.concat([plan, pd.DataFrame([{"날짜": rush_day, "제품": "소시지", "계획물량_kg": 1500, "주문번호": "DEMO-RUSH",
+                                           "납기": (pd.Timestamp(rush_day) + timedelta(days=4)).strftime("%Y-%m-%d"), "우선순위": 200,
+                                           "판매가_원kg": 8500, "라인": "햄 라인"}])], ignore_index=True)
     # 대체표(설명용): 육개장의 수입 냉동 양지를 국산 냉장 사태로 최대 50%, 프레스햄의 수입 냉동 뒷다리를 국산 냉장 앞다리로 최대 40%
     substitute = pd.DataFrame([
         ["육개장", "소", "양지", "수입", "냉동", "사태", "국산", "냉장", 50, 1.0, "식감 확인 필요"],
@@ -882,7 +913,15 @@ def sample_tables(today: date | None = None) -> dict[str, pd.DataFrame]:
         ["소", "양지", "수입", "냉동", "B무역", "수입 담당", "000-0000-0001", 1000, 20, 1],
         ["소", "사태", "국산", "냉장", "C한우", "영업 담당", "000-0000-0002", 100, 10, 1],
     ], columns=["육종", "부위", "원산지", "보관", "공급처", "담당자", "연락처", "최소발주량_kg", "발주단위_kg", "우선순위"])
-    return {"inventory": inventory, "inbound": inbound, "plan": plan, "recipe": recipe, "substitute": substitute, "supplier": supplier}
+    # 부산물(설명용): 손질할 때 나오는 지방·뼈·힘줄을 팔아 회수하는 금액
+    byproduct = pd.DataFrame([
+        ["돼지", "앞다리", "국산", "냉장", "지방", 6, 800],
+        ["돼지", "뒷다리", "수입", "냉동", "지방", 8, 800],
+        ["돼지", "뒷다리", "수입", "냉동", "뼈", 5, 300],
+        ["소", "사태", "국산", "냉장", "힘줄·지방", 6, 1500],
+    ], columns=["육종", "부위", "원산지", "보관", "부산물명", "부산물률", "부산물단가_원kg"])
+    return {"inventory": inventory, "inbound": inbound, "plan": plan, "recipe": recipe, "substitute": substitute, "supplier": supplier,
+            "byproduct": byproduct}
 
 
 def part_list_text() -> str:

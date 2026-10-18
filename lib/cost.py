@@ -206,11 +206,24 @@ def thaw_loss(data: C.CompanyData, key: tuple, settings: C.Settings | None = Non
     return thaw_losses(data, settings).get(tuple(key), C.lot_thaw({}, key[2], key[3], settings or C.Settings())[1])
 
 
+def byproduct_credit(data: C.CompanyData) -> dict[tuple, float]:
+    """원료 -> 투입 원료 1kg당 부산물 회수액(원) = Σ(부산물률 × 부산물 단가). 부산물.csv가 없으면 빈 사전."""
+    b = data.byproduct
+    if b is None or not len(b):
+        return {}
+    v = b.assign(_c=b["부산물률"] / 100 * b["부산물단가_원kg"]).groupby(C.MATERIAL_KEY)["_c"].sum()
+    return {tuple(k): float(x) for k, x in v.items()}
+
+
 def components(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, float] | None = None,
                settings: C.Settings | None = None) -> pd.DataFrame:
-    """제품 x 원료 원료비 구성 (원/제품kg). 냉동 원료는 해동 감량만큼 더 사야 하므로 단가 ÷ (1 − 감량률)로 본다."""
+    """제품 x 원료 원료비 구성 (원/제품kg). 냉동 원료는 해동 감량만큼 더 사야 하므로 단가 ÷ (1 − 감량률)로 본다.
+
+    부산물 회수 = 투입량 × 원료 1kg당 부산물 회수액(부산물.csv). 단가 변동 가정은 부산물 단가에 적용하지 않는다.
+    """
     price = unit_price(material_prices(data), basis)
     losses = thaw_losses(data, settings)
+    credit = byproduct_credit(data)
     pct = change_pct or {}
     rows = []
     for (product, *key), ratio in data.recipe.groupby(["제품"] + C.MATERIAL_KEY)["투입량_kg"].sum().items():
@@ -220,27 +233,33 @@ def components(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, fl
         eff = p / (1 - loss / 100)
         eff2 = eff * (1 + pct.get(label, 0.0) / 100)
         rows.append({"제품": product, "원료": label, "투입량_kg": ratio, "단가": p, "해동감량률": loss,
-                     "해동후단가": eff, "가정단가": eff2, "근거": src, "원료비": ratio * eff, "가정원료비": ratio * eff2})
+                     "해동후단가": eff, "가정단가": eff2, "근거": src, "원료비": ratio * eff, "가정원료비": ratio * eff2,
+                     "부산물회수": ratio * credit.get(tuple(key), 0.0)})
     return pd.DataFrame(rows)
 
 
 def product_costs(data: C.CompanyData, basis: str = "avg", change_pct: dict[str, float] | None = None,
                   settings: C.Settings | None = None) -> pd.DataFrame:
-    """제품별 kg당 원료비 (현재·가정), 판매가 대비 원료비율, 명시된 계획 기간의 원료비 합계."""
+    """제품별 kg당 원료비 (현재·가정), 판매가 대비 원료비율, 명시된 계획 기간의 원료비 합계.
+
+    원료비_원kg는 부산물 회수를 뺀 순원료비다(부산물.csv가 없으면 총원료비와 같다). 총원료비_원kg·부산물회수_원kg를 함께 둔다.
+    """
     comp = components(data, basis, change_pct, settings)
     plan = _plan_future(data)
     rows = []
     for product, g in comp.groupby("제품", sort=False):
         missing = g.loc[g["단가"].isna(), "원료"].tolist()
-        cur = math.nan if missing else float(g["원료비"].sum())
-        new = math.nan if missing else float(g["가정원료비"].sum())
+        back = float(g["부산물회수"].sum())
+        gross = math.nan if missing else float(g["원료비"].sum())
+        cur = gross - back
+        new = math.nan if missing else float(g["가정원료비"].sum()) - back
         p = plan[plan["제품"] == product]
         qty = float(p["계획물량_kg"].sum())
         sale = math.nan
         if SALE in p and p[SALE].notna().any():
             s = p[p[SALE].notna()]
             sale = float((s[SALE] * s["계획물량_kg"]).sum() / s["계획물량_kg"].sum()) if s["계획물량_kg"].sum() > 0 else float(s[SALE].mean())
-        rows.append({"제품": product, "원료비_원kg": cur, "가정원료비_원kg": new, "변화_원kg": new - cur,
+        rows.append({"제품": product, "원료비_원kg": cur, "총원료비_원kg": gross, "부산물회수_원kg": back, "가정원료비_원kg": new, "변화_원kg": new - cur,
                      "변화율": (new / cur - 1) * 100 if cur and not math.isnan(cur) else math.nan,
                      "판매가_원kg": sale, "원료비율": cur / sale * 100 if sale == sale else math.nan,
                      "가정원료비율": new / sale * 100 if sale == sale else math.nan,
@@ -270,3 +289,28 @@ def material_amounts(data: C.CompanyData, proj: C.Projection, basis: str = "next
                      f"{days}일소요금액": buy * p2,
                      "발주검토량_kg": order, "발주금액": order * p2 if order > 0 else 0.0})
     return pd.DataFrame(rows)
+
+
+# ------------------------------------------------------------------ 단가 변동 가정 저장 (실제 파일 모드: data/company/cost_assumptions.json)
+ASSUMPTION_FILE = "cost_assumptions.json"
+MAX_ASSUMPTIONS = 50
+
+
+def load_assumptions() -> list[dict]:
+    import json
+    path = C.COMPANY_DIR / ASSUMPTION_FILE
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def save_assumption(entry: dict) -> list[dict]:
+    """이름이 같으면 새 것으로 바꾼다(최신이 앞). 최대 50개."""
+    import json
+    if not str(entry.get("이름", "")).strip():
+        raise ValueError("가정 이름을 적어 주세요.")
+    items = [e for e in load_assumptions() if e.get("이름") != entry["이름"]]
+    items = [entry, *items][:MAX_ASSUMPTIONS]
+    C.COMPANY_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = C.COMPANY_DIR / (ASSUMPTION_FILE + ".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(C.COMPANY_DIR / ASSUMPTION_FILE)
+    return items

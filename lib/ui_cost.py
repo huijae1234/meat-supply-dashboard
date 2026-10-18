@@ -80,6 +80,10 @@ def _cost_chart(comp: pd.DataFrame, prod: pd.DataFrame, layout) -> go.Figure:
             fig.add_trace(go.Bar(y=order, x=g.values, name=n, orientation="h",
                                  marker_color=colors.get(n, theme.MUTED), hovertemplate="%{y} · " + n + ": %{x:,.0f}원/kg<extra></extra>"))
     p = prod.set_index("제품").reindex(order)
+    if (p["부산물회수_원kg"] > 0.5).any():
+        fig.add_trace(go.Scatter(y=order, x=p["원료비_원kg"], mode="markers", name="부산물 뺀 순원료비",
+                                 marker=dict(symbol="circle-open", size=10, color=theme.INK, line=dict(width=2)),
+                                 hovertemplate="%{y} 순원료비: %{x:,.0f}원/kg<extra></extra>"))
     if (p["변화_원kg"].abs() > 0.5).any():
         fig.add_trace(go.Scatter(y=order, x=p["가정원료비_원kg"], mode="markers", name="가정 적용 후",
                                  marker=dict(symbol="diamond", size=11, color=theme.INK, line=dict(color=theme.SURFACE, width=1)),
@@ -92,6 +96,45 @@ def _cost_chart(comp: pd.DataFrame, prod: pd.DataFrame, layout) -> go.Figure:
     fig.update_xaxes(title="원/kg (제품 1kg당)", tickformat=",.0f", showgrid=True, gridcolor=theme.GRID)
     fig.update_yaxes(showgrid=False)
     return layout(fig, "제품 1kg당 원료비 구성", max(260, 70 + 46 * len(order)))
+
+
+def _assumption_store(label: str, basis: str, pct: dict, cur_total: float, new_total: float, r0: float, r1: float) -> None:
+    """가정에 이름을 붙여 저장·불러오기, 조치 이력에 연결. 샘플은 이 브라우저 세션에만 남는다."""
+    sample = label.startswith("샘플")
+    items = st.session_state.get("sample_assumptions", []) if sample else K.load_assumptions()
+    with st.expander(f"가정 저장·불러오기 ({len(items)}개 저장됨)"):
+        a, b = st.columns([3, 1])
+        name = a.text_input("가정 이름", key="cost_assume_name", placeholder="예: 10월 원가회의 — 환율 +5%")
+        changed = {k: v for k, v in pct.items() if abs(v) >= 0.05}
+        entry = {"이름": name.strip(), "저장시각": str(pd.Timestamp.now(tz="Asia/Seoul").tz_localize(None).floor("s")), "출처": label,
+                 "단가기준": K.BASIS.get(basis, basis), "자동채우기기준": K.SOURCES.get(st.session_state.get("cost_source", ""), ""),
+                 "가정": changed, "계획기간원료비_현재": round(cur_total), "계획기간원료비_가정": round(new_total),
+                 "원료비율_현재": None if r0 != r0 else round(r0, 2), "원료비율_가정": None if r1 != r1 else round(r1, 2)}
+        if b.button("저장", key="cost_assume_save", use_container_width=True, disabled=not name.strip()):
+            if sample:
+                st.session_state["sample_assumptions"] = [entry, *[e for e in items if e["이름"] != entry["이름"]]][:K.MAX_ASSUMPTIONS]
+            else:
+                K.save_assumption(entry)
+            st.success(f"'{entry['이름']}'을 저장했습니다." + (" 샘플 가정은 이 세션에만 남습니다." if sample else ""))
+            items = st.session_state.get("sample_assumptions", []) if sample else K.load_assumptions()
+        if items:
+            names = [e["이름"] for e in items]
+            pick = st.selectbox("저장한 가정", names, key="cost_assume_pick",
+                                format_func=lambda n: next(f"{e['이름']} · {e['저장시각'][:16]} · 변화 {won_big(e['계획기간원료비_가정'] - e['계획기간원료비_현재'])}"
+                                                            for e in items if e["이름"] == n))
+            chosen = next(e for e in items if e["이름"] == pick)
+            st.caption("원료별 가정: " + (", ".join(f"{k} {v:+.1f}%" for k, v in chosen["가정"].items()) or "변화 없음")
+                       + f" · 단가 기준 {chosen['단가기준']}")
+            x, y = st.columns(2)
+            if x.button("이 가정 불러오기", key="cost_assume_load", use_container_width=True):
+                st.session_state["cost_pct"] = dict(chosen["가정"])
+                st.session_state["cost_ver"] = st.session_state.get("cost_ver", 0) + 1
+                st.rerun()
+            if y.button("조치 이력에 연결", key="cost_assume_link", use_container_width=True):
+                st.session_state["pending_action"] = {"출처": label, "판단일": str(C.today_kst().date()), "대응안": f"원가 가정: {chosen['이름']}",
+                                                      "원가가정": chosen}
+                st.success("'조치 이력' 화면에서 담당자·기한·협의 내용을 적어 저장하세요. 가정과 계산 결과가 근거로 함께 남습니다.")
+        st.caption("가정은 화면 계산에만 쓰이며 CSV·발주·자동 알림에는 반영되지 않습니다. 불러오면 지금 데이터로 다시 계산합니다(저장 당시 금액과 다를 수 있음).")
 
 
 def today_summary(data: C.CompanyData) -> None:
@@ -180,7 +223,9 @@ def render_cost(k: float, layout) -> None:
     cur_total, new_total = float(ok["계획원료비"].sum()), float(ok["가정계획원료비"].sum())
     has_sale = K.has_sales(data) and ok["판매가_원kg"].notna().any()
     c1, c2, c3 = st.columns(3)
-    c1.markdown(theme.kpi_html("계획 기간 원료비", won_big(cur_total), f"명시된 생산계획 {ton(float(ok['계획물량_kg'].sum()))} 기준"), unsafe_allow_html=True)
+    back_total = float((ok["부산물회수_원kg"] * ok["계획물량_kg"]).sum())
+    c1.markdown(theme.kpi_html("계획 기간 원료비" + (" (순)" if back_total > 0.5 else ""), won_big(cur_total),
+                               f"명시된 생산계획 {ton(float(ok['계획물량_kg'].sum()))} 기준" + (f" · 부산물 회수 {won_big(back_total)} 뺌" if back_total > 0.5 else "")), unsafe_allow_html=True)
     diff = new_total - cur_total
     c2.markdown(theme.kpi_html("가정 적용 시 변화", ("+" if diff > 0 else "") + won_big(diff) if abs(diff) >= 1 else "변화 없음",
                                _pct((new_total / cur_total - 1) * 100) if cur_total and abs(diff) >= 1 else "단가 변동 가정을 넣으면 바뀝니다",
@@ -194,9 +239,12 @@ def render_cost(k: float, layout) -> None:
                                    f"현재 {_ratio(r0)} → 가정 {_ratio(r1)}" if abs(r1 - r0) >= 0.05 else "판매가가 적힌 제품 기준"), unsafe_allow_html=True)
     else:
         c3.markdown(theme.kpi_html("원료비율 (판매가 대비)", "-", "생산계획에 판매가_원kg가 없음"), unsafe_allow_html=True)
+    _assumption_store(label, basis, pct, cur_total, new_total, r0 if has_sale else math.nan, r1 if has_sale else math.nan)
 
+    has_by = bool((prod["부산물회수_원kg"] > 0.5).any())
     table = pd.DataFrame({
-        "제품": prod["제품"], "kg당 원료비": prod["원료비_원kg"].map(won), "가정 후": prod["가정원료비_원kg"].map(won),
+        "제품": prod["제품"], **({"총원료비": prod["총원료비_원kg"].map(won), "부산물 회수": prod["부산물회수_원kg"].map(lambda v: f"-{v:,.0f}원" if v > 0.5 else "-")} if has_by else {}),
+        ("순원료비(kg당)" if has_by else "kg당 원료비"): prod["원료비_원kg"].map(won), "가정 후": prod["가정원료비_원kg"].map(won),
         "변화": prod.apply(lambda r: "-" if math.isnan(r["변화_원kg"]) else f"{r['변화_원kg']:+,.0f}원 ({r['변화율']:+.1f}%)", axis=1),
         "판매가": prod["판매가_원kg"].map(won), "원료비율": prod["원료비율"].map(_ratio), "가정 후 원료비율": prod["가정원료비율"].map(_ratio),
         "계획 물량": prod["계획물량_kg"].map(ton), "계획 기간 원료비 변화": (prod["가정계획원료비"] - prod["계획원료비"]).map(lambda v: "-" if math.isnan(v) else ("+" if v > 0 else "") + won_big(v)),
@@ -204,7 +252,10 @@ def render_cost(k: float, layout) -> None:
     st.dataframe(table, hide_index=True, use_container_width=True)
     if len(ok):
         st.plotly_chart(_cost_chart(comp[comp["제품"].isin(ok["제품"])], ok, layout), use_container_width=True)
-        st.caption("막대는 현재 단가 기준 원료별 원료비입니다. ◆는 단가 변동 가정을 적용한 원료비, 세로 막대(|)는 판매가입니다.")
+        st.caption("막대는 현재 단가 기준 원료별 원료비입니다. ◆는 단가 변동 가정을 적용한 원료비, 세로 막대(|)는 판매가입니다."
+                   + (" ○는 부산물 회수를 뺀 순원료비이며, 원료비율·계획 기간 원료비·변화는 모두 순원료비 기준입니다." if has_by else ""))
+        if not has_by:
+            st.caption("부산물.csv(원료별 부산물률·부산물 단가)를 올리면 손질 때 나오는 지방·뼈 등의 회수액을 빼고 순원료비로 계산합니다.")
     with st.expander("제품별 원료 구성 자세히"):
         d = comp.assign(**{"투입량(제품 1kg당)": comp["투입량_kg"].map(lambda v: f"{v:.2f}kg"), "단가 ": comp["단가"].map(won), "해동 감량": comp["해동감량률"].map(lambda v: f"{v:.1f}%" if v else "-"),
                            "가정 단가": comp["가정단가"].map(won), "원료비 ": comp["원료비"].map(won), "가정 원료비": comp["가정원료비"].map(won)})
@@ -227,6 +278,7 @@ def render_cost(k: float, layout) -> None:
         st.write("· 제품 1kg당 원료비 = Σ(배합표 투입량 × 원료 단가). 투입량은 수율을 반영한 값이어야 합니다.")
         st.write("· 장부 기준 단가 = 기준일 재고 + 이후 입고 예정 로트 중 단가가 적힌 로트의 수량 가중 평균. 재구매 기준 = 가장 늦은 입고 예정 로트 단가(없으면 장부 기준).")
         st.write("· 단가가 없는 원료는 0원으로 보지 않고 해당 제품 원료비를 '계산 불가'로 둡니다.")
+        st.write("· 부산물 회수 = 투입량 × Σ(부산물률 × 부산물 단가)(부산물.csv, 원료별). 순원료비 = 원료비 − 부산물 회수. 단가 변동 가정은 부산물 단가에 적용하지 않습니다.")
         st.write("· 판매가는 생산계획 행의 판매가_원kg를 계획 물량으로 가중 평균합니다. 원료비율 = 원료비 ÷ 판매가.")
         st.write("· 계획 기간 원료비 = 재고 기준일 이후 명시된 생산계획 물량 × kg당 원료비 (평균 연장 없음).")
         st.write("· 단가 변동 가정은 화면에서만 쓰이며 CSV·발주·알림에 저장되지 않습니다. 시장 소비자가는 참고용 가정입니다.")

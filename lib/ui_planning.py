@@ -71,6 +71,15 @@ def _capacity_settings(data, saved) -> None:
 def _capacity_section(data, settings) -> None:
     from lib import capacity as Q
     st.markdown("#### 생산 능력")
+    if st.session_state.get("co_source") == "sample":
+        on = st.session_state.get("sample_capacity", False)
+        if st.button("샘플 예시 능력 끄기" if on else "샘플 예시 능력으로 보기", key="sample_capacity_btn",
+                     help="햄 6,000 · 베이컨 1,300 · 탕류 1,000 · 양념육 500kg/일. 이 브라우저 세션의 샘플 계산에만 쓰고 설정 파일에는 저장하지 않습니다."):
+            st.session_state["sample_capacity"] = not on
+            st.rerun()
+        if on:
+            st.caption("샘플 예시 능력이 켜져 있습니다(모든 화면의 샘플 계산에 적용, 저장 안 함): "
+                       + ", ".join(f"{k} {v:,}kg" for k, v in C.SAMPLE_CAPACITY.items()))
     _capacity_settings(data, settings)
     if not Q.enabled(data, settings):
         st.caption("라인별 하루 최대 생산량을 정하면 능력을 넘는 날을 찾아 앞뒤 작업일로 나눈 안을 보여 줍니다.")
@@ -331,6 +340,12 @@ def render_worklog():
         state = st.selectbox("진행 상태", W.STATES, index=W.STATES.index(current.get("상태", W.STATES[0])))
         checks = context.get("확인항목", []) if not current else []
         default_action = current.get("대응", "") or ("\n".join(["[원산지 표시 확인] " + "; ".join(context.get("원산지확인", []))] + [f"□ {c}" for c in checks]) if checks else "")
+        ca = context.get("원가가정") if not current else None
+        if ca and not default_action:
+            diff = ca["계획기간원료비_가정"] - ca["계획기간원료비_현재"]
+            default_action = (f"[원가 가정] {ca['이름']} ({ca['단가기준']})\n"
+                              + "\n".join(f"- {k} {v:+.1f}%" for k, v in ca["가정"].items())
+                              + f"\n계획 기간 원료비 {diff:+,.0f}원" + (f", 원료비율 {ca['원료비율_현재']}% → {ca['원료비율_가정']}%" if ca.get("원료비율_현재") is not None else ""))
         action = st.text_area("선택한 대응·협의 내용·확정 입고일", default_action, height=160 if checks else None)
         result = st.text_area("확인 결과·재계산 결과·해결 근거", current.get("결과", ""))
         submitted = st.form_submit_button("새 버전으로 기록 저장")

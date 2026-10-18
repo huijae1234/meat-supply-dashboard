@@ -62,6 +62,17 @@ def _ready_dates(data: C.CompanyData, st_: C.Settings) -> dict[tuple, list]:
     return out
 
 
+def material_check(data: C.CompanyData, settings: C.Settings | None = None):
+    """(제품, 날짜) -> 그날 그 제품의 원료가 모두 들어와 있는지(입고·해동 완료, 기한 안, 사용가능 로트). 수량은 보지 않는다."""
+    st_ = settings or C.Settings()
+    recipes = {p: [tuple(k) for k in g[C.MATERIAL_KEY].itertuples(index=False, name=None)] for p, g in data.recipe.groupby("제품")}
+    ready = _ready_dates(data, st_)
+
+    def ok(product: str, day: pd.Timestamp) -> bool:
+        return all(any(r <= day and (pd.isna(e) or day <= e) for r, e in ready.get(k, [])) for k in recipes.get(product, []))
+    return ok
+
+
 def level(data: C.CompanyData, settings: C.Settings | None = None) -> Leveling:
     st_ = settings or C.Settings()
     base = data.inventory["기준일"].max()
@@ -70,11 +81,7 @@ def level(data: C.CompanyData, settings: C.Settings | None = None) -> Leveling:
     future = plan["날짜"] > base
     load: dict[tuple, float] = plan[future & plan["_line"].notna()].groupby(["_line", "날짜"])["계획물량_kg"].sum().to_dict()
     before = dict(load)
-    recipes = {p: [tuple(k) for k in g[C.MATERIAL_KEY].itertuples(index=False, name=None)] for p, g in data.recipe.groupby("제품")}
-    ready = _ready_dates(data, st_)
-
-    def materials_in(product: str, day: pd.Timestamp) -> bool:
-        return all(any(r <= day and (pd.isna(e) or day <= e) for r, e in ready.get(k, [])) for k in recipes.get(product, []))
+    materials_in = material_check(data, st_)
 
     def workdays(day: pd.Timestamp, step: int) -> list[pd.Timestamp]:
         out, d = [], day

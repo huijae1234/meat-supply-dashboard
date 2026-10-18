@@ -112,6 +112,10 @@ def render_expiry(k: float, layout) -> None:
                                f"처리비 {settings.disposal_cost:,.0f}원/kg 포함" if loss == loss else "단가가 없어 금액 계산 불가" if len(w) else ""), unsafe_allow_html=True)
     c3.markdown(theme.kpi_html("임박", f"{len(s)}로트", "기한 안에 다 쓰지만 가까움" if len(s) else "없음", tone="warning" if len(s) else None), unsafe_allow_html=True)
     c4.markdown(theme.kpi_html("기한 가정 로트", f"{int(assumed.sum())}개", "사용기한 미입력" if assumed.any() else "모두 입력됨"), unsafe_allow_html=True)
+    from_base = ex.lots["기한근거"].str.contains("기준일부터")
+    if from_base.any():
+        st.caption(f"사용기한도 입고일도 없는 재고 {int(from_base.sum())}개 로트는 가정 기한을 재고 기준일부터 셉니다. 오래된 재고라면 기한이 실제보다 길게 잡히니, "
+                   "재고 CSV에 입고일이나 사용기한을 적어 주세요.")
 
     st.markdown("#### 1. 로트별 기한")
     shown = pd.DataFrame({

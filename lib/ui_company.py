@@ -58,12 +58,16 @@ def render_lock(where: str = "") -> bool:
 
 # ------------------------------------------------------------------ 자사 데이터 상태 공유
 def get_settings() -> C.Settings:
-    """화면과 자동 알림은 동일한 저장 설정만 사용한다."""
+    """화면과 자동 알림은 동일한 저장 설정만 사용한다. 샘플 모드에서 '예시 능력'을 켜면 라인 능력만 이 세션에서 바꿔 쓴다."""
     try:
-        return C.load_settings()
+        s = C.load_settings()
     except (ValueError, KeyError, OSError) as exc:
         st.error(f"설정을 읽을 수 없어 계산을 중단했습니다: {exc}")
         st.stop()
+    if st.session_state.get("co_source") == "sample" and st.session_state.get("sample_capacity"):
+        s = copy.deepcopy(s)
+        s.line_capacity = dict(C.SAMPLE_CAPACITY)
+    return s
 
 
 def current_company(note: bool = True) -> tuple[C.CompanyData | None, str]:
