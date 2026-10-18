@@ -44,6 +44,10 @@ def _chart(df: pd.DataFrame, curs: list[str], layout) -> go.Figure:
         if s.empty:
             continue
         y = s / s.iloc[0] * 100 if index else s
+        if not index:  # USD 한 줄만 볼 때는 선 아래 옅은 그라데이션
+            theme.soft_area(fig, s.index, y, c, theme.SERIES[0])
+            fig.data[-1].hovertemplate = "%{x|%m/%d} USD: %{y:,.1f}원<extra></extra>"
+            continue
         fig.add_trace(go.Scatter(x=s.index, y=y, name=c, line=dict(color=theme.SERIES[i % len(theme.SERIES)], width=2 if c == "USD" else 1.5),
                                  hovertemplate="%{x|%m/%d} " + c + (": %{y:.1f}" if index else ": %{y:,.1f}원") + "<extra></extra>"))
     fig.update_yaxes(title="첫날 = 100" if index else "원 (매매기준율)", tickformat=",.0f" if not index else ".0f")

@@ -65,7 +65,7 @@ def layout(fig, title=None, height=380, yfmt=None):
 
 def shade_forecast(fig):
     fig.add_vrect(x0=LAST.to_pydatetime(), x1=sup["week_start"].max().to_pydatetime(),
-                  fillcolor="rgba(11,11,11,0.04)", line_width=0)
+                  fillcolor=theme.rgba(theme.PRIMARY, 0.05), line_width=0)
     return fig
 
 
@@ -188,7 +188,7 @@ def page_syn_status():
     fig.add_trace(go.Scatter(x=a["week_start"], y=a["lower"], fill="tonexty", fillcolor="rgba(11,11,11,0.05)",
                              line=dict(width=0), name=f"정상 범위 (±{k}σ)", hoverinfo="skip"))
     ac, fc = a[a["data_type"] == "actual"], a[a["data_type"] == "forecast"]
-    fig.add_trace(go.Scatter(x=ac["week_start"], y=ac["ending_stock_kg"], name="실적", line=dict(color=ACTUAL, width=2)))
+    theme.soft_area(fig, ac["week_start"], ac["ending_stock_kg"], "실적", ACTUAL)
     fig.add_trace(go.Scatter(x=fc["week_start"], y=fc["ending_stock_kg"], name="파일 예측", line=dict(color=FILEFC, dash="dash", width=2)))
     bad = a[a["signal"] != "정상"]
     fig.add_trace(go.Scatter(x=bad["week_start"], y=bad["ending_stock_kg"], mode="markers", name="경보 주",
@@ -214,7 +214,7 @@ def page_syn_trend():
     d = sup[sup["species"] == species].sort_values("week_start")
     ac, fc = d[d["data_type"] == "actual"], d[d["data_type"] == "forecast"]
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ac["week_start"], y=ac[metric], name="실적", line=dict(color=ACTUAL, width=2)))
+    theme.soft_area(fig, ac["week_start"], ac[metric], "실적", ACTUAL)
     bridge = pd.concat([ac.tail(1), fc])
     fig.add_trace(go.Scatter(x=bridge["week_start"], y=bridge[metric], name="파일 예측", line=dict(color=FILEFC, dash="dash", width=2)))
     if metric in MODELED:
@@ -504,7 +504,7 @@ def page_analysis():
             s_m = LA.monthly_stock(stk9, kd9)
             fm = LA.forecast_series(s_m, 3, 12, 3, 8)
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=s_m.index, y=s_m.values, name="실적", line=dict(color=ACTUAL, width=2)))
+            theme.soft_area(fig, s_m.index, s_m.values, "실적", ACTUAL)
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["lo"], fill="tonexty", fillcolor="rgba(82,81,78,0.10)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fm["index"], y=fm["pred"], name=f"예측({model_name(fm['best'])})", line=dict(color=MODEL, dash="dot", width=2), mode="lines+markers"))
@@ -521,7 +521,7 @@ def page_analysis():
             s_d = LA.daily_price_series(pdl9, kd9, it9)
             fd = LA.forecast_series(s_d, 10, None, 7, 8, step=5)
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=s_d.index, y=s_d.values, name="실적", line=dict(color=ACTUAL, width=2)))
+            theme.soft_area(fig, s_d.index, s_d.values, "실적", ACTUAL)
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["hi"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["lo"], fill="tonexty", fillcolor="rgba(82,81,78,0.10)", line=dict(width=0), name="참고 구간", hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=fd["index"], y=fd["pred"], name=f"예측({model_name(fd['best'])})", line=dict(color=MODEL, dash="dot", width=2)))

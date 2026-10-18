@@ -188,7 +188,7 @@ def test_orders_record_then_today_line(isolated):
     app.text_input(key="orders_owner").set_value("생산관리").run(timeout=60)
     app.button(key="orders_done").click().run(timeout=60)
     assert not app.exception
-    assert any("입고 예정(미반영)" in i.value for i in app.info)
+    assert any("(미반영)으로 계산에" in i.value for i in app.info)
     assert any(b.label.startswith("포함한 발주 0건") for b in app.button)
     events = app.session_state["sample_worklog"]
     today = AppTest.from_string("import streamlit as st\nst.session_state['co_source']='sample'\n"

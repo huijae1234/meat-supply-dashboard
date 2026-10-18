@@ -1,10 +1,19 @@
 [theme]
 base = "light"
-primaryColor = "#1c5cab"
-backgroundColor = "#f9f9f7"
-secondaryBackgroundColor = "#f3f2ee"
-textColor = "#1a1a19"
+primaryColor = "#1f54d4"
+backgroundColor = "#f1f4f8"
+secondaryBackgroundColor = "#e7eef8"
+textColor = "#18212e"
+borderColor = "#dde3eb"
 font = "sans serif"
+
+# 왼쪽 메뉴: 짙은 네이비 바탕 + 밝은 글자 (세로 그라데이션은 lib/theme.py CSS)
+[theme.sidebar]
+backgroundColor = "#162b47"
+secondaryBackgroundColor = "#1d3657"
+textColor = "#e6edf6"
+primaryColor = "#4fd6c2"
+borderColor = "#24405f"
 
 [client]
 toolbarMode = "minimal"

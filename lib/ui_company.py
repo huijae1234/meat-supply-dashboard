@@ -91,7 +91,7 @@ def current_company(note: bool = True) -> tuple[C.CompanyData | None, str]:
         if len(rows):
             data = O.apply_pending(data, rows)
             if note:
-                st.info(f"'발주 완료'로 기록한 {len(rows)}건({', '.join(sorted(set(rows['공급처'].astype(str))))})을 **입고 예정(미반영)**으로 계산에 넣었습니다. "
+                st.info(f"'발주 완료'로 기록한 {len(rows)}건({', '.join(sorted(set(rows['공급처'].astype(str))))})을 **입고 예정**(미반영)으로 계산에 넣었습니다. "
                         "입고예정.csv에 반영해 다시 올리면 자동으로 빠집니다. 끄려면 '현장 지시서'에서 해제하세요.")
     return data, label
 

@@ -76,7 +76,7 @@ def today_summary(data: C.CompanyData) -> None:
 def render_expiry(k: float, layout) -> None:
     from lib import ui_company as UC
     st.subheader("소비기한")
-    st.caption("생산계획대로 써도 **사용기한까지 다 못 쓰고 남는 양(폐기 예상)**과 기한이 임박한 로트를 찾고, 증산·다른 제품에 돌리기로 줄일 수 있는지 비교합니다. "
+    st.caption("생산계획대로 써도 **사용기한까지 다 못 쓰고 남는 양**(폐기 예상)과 기한이 임박한 로트를 찾고, 증산·다른 제품에 돌리기로 줄일 수 있는지 비교합니다. "
                "품질·안전 판정이나 법적 기한 결정이 아닙니다.")
     if UC.render_lock("소비기한"):
         return
